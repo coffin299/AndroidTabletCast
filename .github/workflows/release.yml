@@ -40,11 +40,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
-      - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses || true
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      # v3 は廃止済みの tools パッケージを入れるため sdkmanager が失敗する。
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
       - name: Decode release keystore
         if: env.HAS_KEYSTORE == 'true'
         env:

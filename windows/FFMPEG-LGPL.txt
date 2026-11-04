@@ -3,7 +3,7 @@
 アプリ本体とは静的リンクせず、実行時に同じフォルダから読み込みます。
 
 対応するソースは、windows/tools/fetch-ffmpeg.ps1 が取得する
-BtbN/FFmpeg-Builds の ffmpeg-n7.1.1-latest-win64-lgpl-shared です。
+BtbN/FFmpeg-Builds の ffmpeg-n7.1.5-12-g1fdbca85aa-win64-lgpl-shared-7.1 です。
 ライセンス本文: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 
 FFmpeg は Fabrice Bellard に由来する名称です。

@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File windows\tools\fetch-ffmpeg.ps1
 dotnet build windows\AndroidTabletCast\AndroidTabletCast.csproj
 ```
 
-`fetch-ffmpeg.ps1` は FFmpeg 7.1.1 の LGPL 共有 DLL を `windows/ffmpeg/bin` に置く。ビルド時に exe の横へコピーする。ライセンスは [windows/FFMPEG-LGPL.txt](windows/FFMPEG-LGPL.txt)。
+`fetch-ffmpeg.ps1` は FFmpeg 7.1.5 の LGPL 共有 DLL を `windows/ffmpeg/bin` に置く。ビルド時に exe の横へコピーする。ライセンスは [windows/FFMPEG-LGPL.txt](windows/FFMPEG-LGPL.txt)。
 
 ## 署名 Secrets
 
