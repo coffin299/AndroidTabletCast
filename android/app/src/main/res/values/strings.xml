@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tablet Cast</string>
+    <string name="accessibility_description">配信中だけ、Windows からのタップ・文字入力・戻る操作をタブレットへ渡します。ウィンドウの中身は、文字入力のためにフォーカス中の入力欄へ書くとき以外は使いません。</string>
+    <string name="start_cast">配信を開始</string>
+    <string name="stop_cast">配信を停止</string>
+    <string name="trust_mode">信頼するデバイスは PIN 不要</string>
+    <string name="trust_help">初回は PIN が必要です。接続中に Windows から信頼を依頼し、この画面で許可した PC だけが次回から PIN なしでつながります。</string>
+    <string name="latency_help">映像はハードウェア符号化で遅延を抑えます。ユーザー補助での操作はシステム側の都合で映像より遅れます。Shizuku を許可すると、より直接的な入力注入に切り替わります。</string>
+</resources>

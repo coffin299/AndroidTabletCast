@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Accept SDK licenses
+        run: yes | sdkmanager --licenses || true
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Test and build debug APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew :app:testDebugUnitTest :app:assembleDebug
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test protocol
+        run: dotnet test windows/AndroidTabletCast.Protocol.Tests/AndroidTabletCast.Protocol.Tests.csproj -c Release
+      - name: Fetch FFmpeg
+        run: powershell -ExecutionPolicy Bypass -File windows/tools/fetch-ffmpeg.ps1
+      - name: Build Windows app
+        run: dotnet build windows/AndroidTabletCast/AndroidTabletCast.csproj -c Release

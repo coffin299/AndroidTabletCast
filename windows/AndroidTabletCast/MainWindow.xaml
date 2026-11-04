@@ -1,0 +1,68 @@
+<Window x:Class="AndroidTabletCast.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Android Tablet Cast"
+        Width="1200"
+        Height="760"
+        Background="#FF101418"
+        Foreground="{StaticResource InkBrush}"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewKeyUp="Window_PreviewKeyUp">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="SideColumn" Width="320" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <DockPanel x:Name="SidePanel" Grid.Column="0" Background="{StaticResource PanelBrush}" Margin="12">
+            <StackPanel DockPanel.Dock="Bottom">
+                <TextBlock x:Name="StatusText" Text="停止中" TextWrapping="Wrap" Margin="0,8,0,4" />
+                <TextBlock x:Name="LatencyText" Text="遅延 --" />
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="タブレット" FontSize="22" FontWeight="Bold" />
+                    <ListBox x:Name="DeviceList" Height="160" Margin="0,8,0,8" SelectionChanged="DeviceList_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" />
+                                    <TextBlock Text="{Binding Host}" FontSize="11" Opacity="0.7" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Text="IP" />
+                    <TextBox x:Name="IpBox" Margin="0,4,0,8" />
+                    <TextBlock Text="ポート" />
+                    <TextBox x:Name="PortBox" Margin="0,4,0,8" Text="39721" />
+                    <TextBlock Text="PIN（信頼接続では空欄）" />
+                    <TextBox x:Name="PinBox" Margin="0,4,0,8" />
+                    <ComboBox x:Name="PresetBox" SelectedIndex="2" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
+                        <ComboBoxItem Content="低遅延" />
+                        <ComboBoxItem Content="バランス" />
+                        <ComboBoxItem Content="高画質" />
+                    </ComboBox>
+                    <CheckBox x:Name="HoverBox" Content="ボタンを離した移動も送る（Shizuku 向け）" Margin="0,0,0,8" />
+                    <CheckBox x:Name="MuteBox" Content="音声をミュート" Checked="MuteBox_Changed" Unchecked="MuteBox_Changed" Margin="0,0,0,8" />
+                    <Button x:Name="ConnectButton" Content="接続" Margin="0,0,0,8" Click="ConnectButton_Click" />
+                    <Button Content="切断" Margin="0,0,0,8" Click="DisconnectButton_Click" />
+                    <Button x:Name="TrustButton" Content="この PC を信頼させる" Margin="0,0,0,8" Click="TrustButton_Click" IsEnabled="False" />
+                    <Button Content="このタブレットの信頼を消す" Margin="0,0,0,8" Click="ForgetButton_Click" />
+                    <Button Content="フルスクリーン" Margin="0,0,0,8" Click="FullscreenButton_Click" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#FF8AA0AE" Text="右クリックは戻る、中クリックはホームです。Esc はフルスクリーン中は解除、それ以外は戻るです。" />
+                </StackPanel>
+            </ScrollViewer>
+        </DockPanel>
+
+        <Image x:Name="VideoImage"
+               Grid.Column="1"
+               Stretch="Uniform"
+               MouseLeftButtonDown="Video_MouseDown"
+               MouseLeftButtonUp="Video_MouseUp"
+               MouseMove="Video_MouseMove"
+               MouseDown="Video_MiddleClick"
+               MouseRightButtonUp="Video_RightClick"
+               MouseWheel="Video_Wheel" />
+    </Grid>
+</Window>

@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "リリースタグ（例: v1.2.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tag format and uniqueness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "タグは v1.2.3 または v1.2.3-rc.1 の形にしてください: $TAG"
+            exit 1
+          fi
+          if gh api "repos/${{ github.repository }}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "タグ $TAG は既にあります。上書きしません。"
+            exit 1
+          fi
+
+  android:
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Accept SDK licenses
+        run: yes | sdkmanager --licenses || true
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Decode release keystore
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Build signed release APK
+        if: env.HAS_KEYSTORE == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: chmod +x gradlew && ./gradlew :app:assembleRelease
+      - name: Build debug-signed APK
+        if: env.HAS_KEYSTORE != 'true'
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew :app:assembleDebug
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          apk=$(find android/app/build/outputs/apk -name '*.apk' | head -n 1)
+          cp "$apk" dist/AndroidTabletCast-android.apk
+          if [ "${HAS_KEYSTORE}" = "true" ]; then
+            echo "signed=release" > dist/signing.txt
+          else
+            echo "signed=debug" > dist/signing.txt
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Fetch FFmpeg
+        run: powershell -ExecutionPolicy Bypass -File windows/tools/fetch-ffmpeg.ps1
+      - name: Publish
+        run: dotnet publish windows/AndroidTabletCast/AndroidTabletCast.csproj -c Release -r win-x64 --self-contained true -o publish/win
+      - name: Zip
+        run: Compress-Archive -Path publish/win/* -DestinationPath AndroidTabletCast-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: AndroidTabletCast-win-x64.zip
+
+  release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Write notes
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          signed=$(cat artifacts/android-apk/signing.txt)
+          note="署名付き release APK です。同じ署名のまま上書きインストールできます。"
+          if [ "$signed" = "signed=debug" ]; then
+            note="debug 署名の APK です。更新するときは一度アンインストールしてください。上書きインストールにするには README の署名 Secrets を設定してください。"
+          fi
+          cat > notes.md <<EOF
+          ## ${TAG}
+
+          - AndroidTabletCast-android.apk をタブレットに入れる
+          - AndroidTabletCast-win-x64.zip を Windows 11 で展開して起動する
+          - ${note}
+
+          同じ Wi-Fi 上だけで映像を送ります。
+          EOF
+          sed -i 's/^          //' notes.md
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            artifacts/android-apk/AndroidTabletCast-android.apk \
+            artifacts/windows-zip/AndroidTabletCast-win-x64.zip \
+            --title "$TAG" \
+            --notes-file notes.md

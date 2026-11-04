@@ -1,0 +1,2 @@
+-keep class com.androidtabletcast.InputUserService { *; }
+-keep class com.androidtabletcast.IInputInjector { *; }

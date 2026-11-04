@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AndroidTabletCast" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#7CDB9A</item>
+        <item name="colorOnPrimary">#062116</item>
+        <item name="android:statusBarColor">#101418</item>
+        <item name="android:navigationBarColor">#101418</item>
+        <item name="android:windowBackground">#101418</item>
+        <item name="android:textColor">#E8EEF2</item>
+    </style>
+
+    <style name="Theme.TrustPrompt" parent="Theme.Material3.DayNight.Dialog">
+        <item name="android:windowBackground">#1C242B</item>
+    </style>
+</resources>

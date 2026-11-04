@@ -1,0 +1,9 @@
+Android Tablet Cast（Windows）
+
+1. このフォルダの AndroidTabletCast.exe を起動する。
+2. 初回はプライベートネットワークへの通信を許可する。
+3. タブレットと同じ Wi-Fi で、表示された端末を選ぶ。
+4. 見つからない場合は、タブレットに出ている IP とポート 39721 を直接入力する。
+5. PIN を入力して接続する。信頼登録後は、タブレット側の「信頼するデバイスは PIN 不要」がオンなら PIN を空のまま接続できる。
+
+同梱の avcodec などの DLL は FFmpeg（LGPL 2.1）です。詳細は FFMPEG-LGPL.txt を見てください。

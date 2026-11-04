@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>AndroidTabletCast</RootNamespace>
+    <ApplicationTitle>Android Tablet Cast</ApplicationTitle>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FFmpeg.AutoGen" Version="7.1.1" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AndroidTabletCast.Core\AndroidTabletCast.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\DIST.txt" Link="起動手順.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\FFMPEG-LGPL.txt" Link="FFMPEG-LGPL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyFfmpeg" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <FfmpegDll Include="$(MSBuildThisFileDirectory)..\ffmpeg\bin\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(OutputPath)' != ''" />
+    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(PublishDir)' != ''" />
+  </Target>
+</Project>
