@@ -45,7 +45,7 @@
                         <ComboBoxItem Content="最高画質" />
                     </ComboBox>
                     <TextBlock Text="Windows デコード" />
-                    <ComboBox x:Name="DecoderModeBox" SelectedIndex="0" Margin="0,4,0,8">
+                    <ComboBox x:Name="DecoderModeBox" SelectedIndex="2" Margin="0,4,0,8">
                         <ComboBoxItem Content="自動（ハードウェア優先）" />
                         <ComboBoxItem Content="ソフトウェア" />
                         <ComboBoxItem Content="D3D11VA" />

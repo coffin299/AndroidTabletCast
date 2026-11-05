@@ -121,12 +121,14 @@ class CastService : Service(), StreamEvents {
             }
             video?.replayConfig()
             video?.requestKeyframe()
+            audio?.takeIf { it.isRunning }?.replayConfigAndResume()
             startAudio()
             CastStatus.update { it.copy(connected = true, status = "接続中") }
         }
     }
 
     override fun onClientClosed() {
+        audio?.pauseSending()
         main.post {
             // 切ったあとに仮想ディスプレイを破棄すると、次の接続で再作成に失敗して落ちることがある。
             CastStatus.update { it.copy(connected = false, status = "待受中") }
@@ -251,8 +253,13 @@ class CastService : Service(), StreamEvents {
     }
 
     private fun startAudio() {
-        if (audio != null) {
-            return
+        val existing = audio
+        if (existing != null) {
+            if (existing.isRunning) {
+                return
+            }
+            existing.stop()
+            audio = null
         }
         val currentProjection = projection ?: return
         try {

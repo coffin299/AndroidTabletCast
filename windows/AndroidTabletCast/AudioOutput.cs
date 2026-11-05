@@ -41,9 +41,9 @@ public sealed unsafe class AudioOutput : IDisposable
         buffer = new BufferedWaveProvider(new WaveFormat(sampleRate, 16, channels))
         {
             DiscardOnBufferOverflow = true,
-            BufferDuration = TimeSpan.FromMilliseconds(80),
+            BufferDuration = TimeSpan.FromMilliseconds(250),
         };
-        output = new WaveOutEvent { DesiredLatency = 50 };
+        output = new WaveOutEvent { DesiredLatency = 100 };
         output.Init(buffer);
         output.Play();
         open = true;
