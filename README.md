@@ -13,7 +13,7 @@ GitHub の Actions で **Release** を手動実行し、タグ（例: `v0.1.0`�
 - `AndroidTabletCast-android.apk`
 - `AndroidTabletCast-win-x64.zip`
 
-タブレットに APK を入れ、Windows では zip を展開して `AndroidTabletCast.exe` を起動する。初回は PIN、信頼を登録してタブレット側のスイッチをオンにすると、その PC は次回から PIN なしでつながる。一覧の同じ端末は 1 件だけ出る。最高画質は長辺 3840、120Mbps です。HEVC のハードウェアエンコーダがあるタブレットは H.265 で送ります。OBS で取り込むときは、Windows の「OBS 用ウィンドウ」をウィンドウキャプチャする。
+タブレットに APK を入れ、Windows では zip を展開して `AndroidTabletCast.exe` を起動する。初回は PIN、信頼を登録してタブレット側のスイッチをオンにすると、その PC は次回から PIN なしでつながる。一覧の同じ端末は 1 件だけ出る。タブレット側で映像コーデックを自動・H.264・H.265から選べます。最高画質は長辺 3840、120Mbps です。OBS で取り込むときは、Windows の「OBS 用ウィンドウ」をウィンドウキャプチャする。
 
 ## 開発ビルド
 

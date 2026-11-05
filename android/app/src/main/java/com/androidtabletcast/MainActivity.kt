@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.AdapterView
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -59,6 +61,16 @@ class MainActivity : AppCompatActivity() {
         trustSwitch.setOnCheckedChangeListener { _, checked ->
             preferences.trustMode = checked
             CastService.instance?.refreshTrustMode()
+        }
+
+        val videoEncoderSpinner = findViewById<Spinner>(R.id.videoEncoderSpinner)
+        videoEncoderSpinner.setSelection(preferences.videoEncoder, false)
+        videoEncoderSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                preferences.videoEncoder = position
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
 
         findViewById<MaterialButton>(R.id.castButton).setOnClickListener {
@@ -129,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<MaterialButton>(R.id.castButton).text =
             if (snapshot.running) getString(R.string.stop_cast) else getString(R.string.start_cast)
+        findViewById<Spinner>(R.id.videoEncoderSpinner).isEnabled = !snapshot.running
     }
 
     private fun renderPermissions() {

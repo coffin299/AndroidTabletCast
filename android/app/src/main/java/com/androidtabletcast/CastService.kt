@@ -232,6 +232,7 @@ class CastService : Service(), StreamEvents {
                 display.first,
                 display.second,
                 display.third,
+                codecPreference = Preferences(this).videoEncoder,
                 send = { packet -> server?.send(packet) },
             )
             if (!videoPipeline.start(preset)) {

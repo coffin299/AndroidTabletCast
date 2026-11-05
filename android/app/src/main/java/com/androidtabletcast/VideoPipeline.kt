@@ -15,6 +15,7 @@ class VideoPipeline(
     private val deviceWidth: Int,
     private val deviceHeight: Int,
     private val densityDpi: Int,
+    private val codecPreference: Int,
     private val send: (Packet) -> Unit,
 ) {
     private val lock = Any()
@@ -190,10 +191,14 @@ class VideoPipeline(
     }
 
     private fun openEncoder(size: FrameSize, preset: StreamPreset): Pair<MediaCodec, FrameSize>? {
-        val preferred = if (hardwareSupports(MediaFormat.MIMETYPE_VIDEO_HEVC, size)) {
-            MediaFormat.MIMETYPE_VIDEO_HEVC
-        } else {
-            MediaFormat.MIMETYPE_VIDEO_AVC
+        val preferred = when (codecPreference) {
+            VIDEO_ENCODER_H264 -> MediaFormat.MIMETYPE_VIDEO_AVC
+            VIDEO_ENCODER_H265 -> MediaFormat.MIMETYPE_VIDEO_HEVC
+            else -> if (hardwareSupports(MediaFormat.MIMETYPE_VIDEO_HEVC, size)) {
+                MediaFormat.MIMETYPE_VIDEO_HEVC
+            } else {
+                MediaFormat.MIMETYPE_VIDEO_AVC
+            }
         }
         val opened = configureMime(preferred, size, preset)
         if (opened != null) {
