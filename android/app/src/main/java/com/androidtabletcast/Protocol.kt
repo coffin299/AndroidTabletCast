@@ -8,7 +8,8 @@ import javax.crypto.spec.SecretKeySpec
 
 /** TCP 上のフレームは type 1 バイト + 長さ 4 バイト（ビッグエンディアン）+ payload。 */
 const val PROTOCOL_VERSION = 1
-const val MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+// 4K / high bitrate の IDR は数 MiB を超えることがある。
+const val MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 const val MAX_NAME_BYTES = 64
 const val TCP_PORT = 39721
 const val UDP_BEACON_PORT = 39720

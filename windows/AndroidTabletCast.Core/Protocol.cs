@@ -6,7 +6,8 @@ namespace AndroidTabletCast;
 public static class ProtocolLimits
 {
     public const int Version = 1;
-    public const int MaxPayloadBytes = 4 * 1024 * 1024;
+    // 4K / high bitrate の IDR は数 MiB を超えることがある。
+    public const int MaxPayloadBytes = 32 * 1024 * 1024;
     public const int MaxNameBytes = 64;
     public const int TcpPort = 39721;
     public const int UdpBeaconPort = 39720;
