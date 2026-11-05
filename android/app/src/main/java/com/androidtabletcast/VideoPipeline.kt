@@ -41,31 +41,7 @@ class VideoPipeline(
     fun start(presetId: Int): Boolean {
         synchronized(lock) {
             stopLocked()
-            val chosen = presetOf(presetId)
-            preset = chosen
-            val requested = scaledSize(deviceWidth, deviceHeight, chosen.longSide)
-            val rates = listOf(chosen.bitrate, chosen.bitrate / 2).distinct()
-            for (rate in rates) {
-                val attempt = chosen.copy(bitrate = rate)
-                if (tryStart(requested, attempt)) {
-                    preset = attempt
-                    return true
-                }
-            }
-            val sizes = listOf(
-                scaledSize(deviceWidth, deviceHeight, 1280),
-                scaledSize(deviceWidth, deviceHeight, 960),
-            ).distinctBy { size -> size.width to size.height }
-            for (size in sizes) {
-                if (size.width == requested.width && size.height == requested.height) {
-                    continue
-                }
-                if (tryStart(size, chosen)) {
-                    return true
-                }
-            }
-            running = false
-            return false
+            return startEncoderLocked(presetId)
         }
     }
 
@@ -103,7 +79,20 @@ class VideoPipeline(
         if (running && preset.id == presetId) {
             return true
         }
-        return start(presetId)
+        synchronized(lock) {
+            // Android 14 以降は同じ MediaProjection で VirtualDisplay を作り直せない。
+            // 画面投影は維持し、エンコーダの Surface だけを差し替える。
+            val previousPreset = preset.id
+            stopEncoderLocked()
+            if (startEncoderLocked(presetId)) {
+                return true
+            }
+            Log.w(TAG, "preset $presetId failed; restoring preset $previousPreset")
+            if (!startEncoderLocked(previousPreset)) {
+                Log.e(TAG, "failed to restore preset $previousPreset")
+            }
+            return false
+        }
     }
 
     fun stop() {
@@ -113,22 +102,78 @@ class VideoPipeline(
     }
 
     private fun stopLocked() {
+        stopEncoderLocked()
+        try {
+            display?.release()
+        } catch (_: Exception) {
+        }
+        display = null
+    }
+
+    private fun stopEncoderLocked() {
         running = false
         activeWidth = 0
         activeHeight = 0
         val worker = thread
         thread = null
-        display?.release()
-        display = null
+        val oldCodec = codec
+        codec = null
         try {
-            codec?.stop()
+            worker?.join(250)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        try {
+            oldCodec?.stop()
         } catch (_: Exception) {
         }
-        worker?.join(500)
-        surface?.release()
+        try {
+            worker?.join(250)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        try {
+            display?.setSurface(null)
+        } catch (_: Exception) {
+        }
+        try {
+            surface?.release()
+        } catch (_: Exception) {
+        }
         surface = null
-        codec?.release()
-        codec = null
+        try {
+            oldCodec?.release()
+        } catch (_: Exception) {
+        }
+        lastConfig = null
+    }
+
+    private fun startEncoderLocked(presetId: Int): Boolean {
+        val chosen = presetOf(presetId)
+        preset = chosen
+        val requested = scaledSize(deviceWidth, deviceHeight, chosen.longSide)
+        val rates = listOf(chosen.bitrate, chosen.bitrate / 2).distinct()
+        for (rate in rates) {
+            val attempt = chosen.copy(bitrate = rate)
+            if (tryStart(requested, attempt)) {
+                preset = attempt
+                return true
+            }
+        }
+        val sizes = listOf(
+            scaledSize(deviceWidth, deviceHeight, 1280),
+            scaledSize(deviceWidth, deviceHeight, 960),
+        ).distinctBy { size -> size.width to size.height }
+        for (size in sizes) {
+            if (size.width == requested.width && size.height == requested.height) {
+                continue
+            }
+            if (tryStart(size, chosen)) {
+                return true
+            }
+        }
+        running = false
+        return false
     }
 
     private fun tryStart(size: FrameSize, chosen: StreamPreset): Boolean {
@@ -136,27 +181,37 @@ class VideoPipeline(
         val encoder = opened.first
         val fitted = opened.second
         var input: Surface? = null
-        var virtual: android.hardware.display.VirtualDisplay? = null
+        var createdDisplay: android.hardware.display.VirtualDisplay? = null
         try {
             input = encoder.createInputSurface()
             encoder.start()
             val dpi = densityDpi.coerceAtLeast(1)
             val mirror = android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
-            val visible = android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or mirror
-            virtual = try {
-                projection.createVirtualDisplay("atcast", fitted.width, fitted.height, dpi, visible, input, null, null)
-            } catch (_: Exception) {
-                projection.createVirtualDisplay("atcast", fitted.width, fitted.height, dpi, mirror, input, null, null)
+            val currentDisplay = display
+            val targetDisplay = if (currentDisplay != null) {
+                currentDisplay.resize(fitted.width, fitted.height, dpi)
+                currentDisplay.setSurface(input)
+                currentDisplay
+            } else {
+                val created = projection.createVirtualDisplay(
+                    "atcast",
+                    fitted.width,
+                    fitted.height,
+                    dpi,
+                    mirror,
+                    input,
+                    null,
+                    null,
+                ) ?: throw IllegalStateException("仮想ディスプレイを作成できません")
+                createdDisplay = created
+                created
             }
-            try {
-                virtual.setSurface(input)
-            } catch (_: Exception) {
-            }
+            targetDisplay.setSurface(input)
             codec = encoder
             activeWidth = fitted.width
             activeHeight = fitted.height
             surface = input
-            display = virtual
+            display = targetDisplay
             running = true
             val worker = Thread({ drainLoop(encoder, fitted) }, "atcast-video")
             worker.setUncaughtExceptionHandler { _, error ->
@@ -171,21 +226,35 @@ class VideoPipeline(
             running = false
             activeWidth = 0
             activeHeight = 0
+            try {
+                display?.setSurface(null)
+            } catch (_: Exception) {
+            }
             if (codec === encoder) {
                 codec = null
+            }
+            if (surface === input) {
                 surface = null
+            }
+            if (createdDisplay != null && display === createdDisplay) {
                 display = null
             }
             try {
-                virtual?.release()
+                createdDisplay?.release()
             } catch (_: Exception) {
             }
             try {
                 encoder.stop()
             } catch (_: Exception) {
             }
-            input?.release()
-            encoder.release()
+            try {
+                input?.release()
+            } catch (_: Exception) {
+            }
+            try {
+                encoder.release()
+            } catch (_: Exception) {
+            }
             return false
         }
     }

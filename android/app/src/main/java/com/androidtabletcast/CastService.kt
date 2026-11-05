@@ -142,7 +142,10 @@ class CastService : Service(), StreamEvents {
         main.post {
             val current = video ?: return@post
             if (!current.changePreset(preset)) {
-                CastStatus.update { it.copy(status = "画質の変更に失敗しました") }
+                CastStatus.update { it.copy(status = "画質変更に失敗しました（前の設定への復旧を試しました）") }
+            } else {
+                current.replayConfig()
+                current.requestKeyframe()
             }
         }
     }
