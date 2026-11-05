@@ -50,7 +50,8 @@
                     <Button x:Name="TrustButton" Content="この PC を信頼させる" Margin="0,0,0,8" Click="TrustButton_Click" IsEnabled="False" />
                     <Button Content="このタブレットの信頼を消す" Margin="0,0,0,8" Click="ForgetButton_Click" />
                     <Button Content="フルスクリーン" Margin="0,0,0,8" Click="FullscreenButton_Click" />
-                    <TextBlock TextWrapping="Wrap" Foreground="#FF8AA0AE" Text="右クリックは戻る、中クリックはホームです。Esc はフルスクリーン中は解除、それ以外は戻るです。" />
+                    <Button Content="OBS 用ウィンドウ" Margin="0,0,0,8" Click="ObsButton_Click" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#FF8AA0AE" Text="右クリックは戻る、中クリックはホームです。Esc はフルスクリーン中は解除、それ以外は戻るです。OBS 用ウィンドウは映像だけで、操作は送りません。" />
                 </StackPanel>
             </ScrollViewer>
         </DockPanel>

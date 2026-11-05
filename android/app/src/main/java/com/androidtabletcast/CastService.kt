@@ -11,6 +11,9 @@ import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
+import android.util.DisplayMetrics
+import android.util.Log
+import android.view.Display
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -101,12 +104,25 @@ class CastService : Service(), StreamEvents {
     }
 
     override fun onAuthenticated(preset: Int) {
-        main.post { startPipelines(desiredPreset) }
+        main.post {
+            // 仮想ディスプレイは配信開始時に作ってある。ここでは溜めた設定と IDR を送り直す。
+            if (video == null) {
+                startVideo(desiredPreset)
+            }
+            if (video == null) {
+                CastStatus.update { it.copy(connected = true, status = "映像を開始できませんでした") }
+                return@post
+            }
+            video?.replayConfig()
+            video?.requestKeyframe()
+            startAudio()
+            CastStatus.update { it.copy(connected = true, status = "接続中") }
+        }
     }
 
     override fun onClientClosed() {
         main.post {
-            stopPipelines()
+            // 切ったあとに仮想ディスプレイを破棄すると、次の接続で再作成に失敗して落ちることがある。
             CastStatus.update { it.copy(connected = false, status = "待受中") }
         }
     }
@@ -117,7 +133,12 @@ class CastService : Service(), StreamEvents {
 
     override fun onPreset(preset: Int) {
         desiredPreset = preset
-        main.post { video?.changePreset(preset) }
+        main.post {
+            val current = video ?: return@post
+            if (!current.changePreset(preset)) {
+                CastStatus.update { it.copy(status = "画質の変更に失敗しました") }
+            }
+        }
     }
 
     override fun onInput(packet: Packet) {
@@ -175,12 +196,14 @@ class CastService : Service(), StreamEvents {
         stream.trustMode = Preferences(this).trustMode
         stream.start(pin, trustStore.tabletId(), display.first, display.second)
         server = stream
+        // 画面収録の許可の直後、アプリが前面にあるうちにエンコーダを開始する。
+        val videoReady = startVideo(desiredPreset)
         CastStatus.update {
             it.copy(
                 running = true,
                 pin = pin,
                 ips = localIpv4().joinToString("\n").ifEmpty { "IP なし" },
-                status = "待受中",
+                status = if (videoReady) "待受中" else "映像を開始できませんでした",
                 connected = false,
             )
         }
@@ -190,26 +213,43 @@ class CastService : Service(), StreamEvents {
         server?.trustMode = Preferences(this).trustMode
     }
 
-    private fun startPipelines(preset: Int) {
-        val currentProjection = projection ?: return
+    private fun startVideo(preset: Int): Boolean {
+        val currentProjection = projection ?: return false
         val display = readDisplay(this)
         router?.resize(display.first, display.second)
-        stopPipelines()
-        val videoPipeline = VideoPipeline(
-            currentProjection,
-            display.first,
-            display.second,
-            display.third,
-            send = { packet -> server?.send(packet) },
-        )
-        videoPipeline.start(preset)
-        video = videoPipeline
+        video?.stop()
+        video = null
+        try {
+            val videoPipeline = VideoPipeline(
+                currentProjection,
+                display.first,
+                display.second,
+                display.third,
+                send = { packet -> server?.send(packet) },
+            )
+            if (!videoPipeline.start(preset)) {
+                return false
+            }
+            video = videoPipeline
+            return true
+        } catch (error: Exception) {
+            Log.e(TAG, "video pipeline failed", error)
+            return false
+        }
+    }
+
+    private fun startAudio() {
+        if (audio != null) {
+            return
+        }
+        val currentProjection = projection ?: return
         try {
             val audioPipeline = AudioPipeline(currentProjection) { packet -> server?.send(packet) }
             audioPipeline.start()
             audio = audioPipeline
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             // 再生音を取れない端末でも映像は続ける。
+            Log.e(TAG, "audio pipeline failed", error)
         }
     }
 
@@ -266,22 +306,13 @@ class CastService : Service(), StreamEvents {
     }
 
     private fun startInForeground() {
+        // mediaPlayback を足すと、再生していないサービスをシステムが接続時に止める端末がある。
         val projectionType = if (Build.VERSION.SDK_INT >= 29) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         } else {
             0
         }
-        try {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), projectionType)
-        } catch (_: Exception) {
-            val fallback = if (Build.VERSION.SDK_INT >= 29) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            } else {
-                0
-            }
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), fallback)
-        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), projectionType)
     }
 
     private fun notification(): Notification {
@@ -318,6 +349,7 @@ class CastService : Service(), StreamEvents {
         const val ACTION_STOP = "com.androidtabletcast.STOP"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
+        private const val TAG = "atcast"
         private const val CHANNEL_ID = "cast"
         private const val NOTIFICATION_ID = 7
 
@@ -327,16 +359,26 @@ class CastService : Service(), StreamEvents {
 }
 
 fun readDisplay(context: Context): Triple<Int, Int, Int> {
-    val window = context.getSystemService(android.view.WindowManager::class.java)
-    val density = context.resources.displayMetrics.densityDpi
-    if (Build.VERSION.SDK_INT >= 30) {
-        val bounds = window.currentWindowMetrics.bounds
-        return Triple(bounds.width(), bounds.height(), density)
+    try {
+        val manager = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+        val display = manager?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            display.getRealMetrics(metrics)
+            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                return Triple(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi.coerceAtLeast(1))
+            }
+        }
+    } catch (_: Exception) {
+        // サービスからウィンドウ寸法を取れない端末は、リソースの既定値に落とす。
     }
-    val point = android.graphics.Point()
-    @Suppress("DEPRECATION")
-    window.defaultDisplay.getRealSize(point)
-    return Triple(point.x, point.y, density)
+    val fallback = context.resources.displayMetrics
+    return Triple(
+        fallback.widthPixels.coerceAtLeast(16),
+        fallback.heightPixels.coerceAtLeast(16),
+        fallback.densityDpi.coerceAtLeast(1),
+    )
 }
 
 fun accessibilityEnabled(context: Context): Boolean {

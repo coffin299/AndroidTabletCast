@@ -6,6 +6,7 @@ import android.media.MediaFormat
 import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.Surface
 
 class VideoPipeline(
@@ -28,30 +29,33 @@ class VideoPipeline(
     var preset: StreamPreset = presetOf(PRESET_HIGH_QUALITY)
         private set
 
-    fun start(presetId: Int) {
+    @Volatile
+    private var lastConfig: Packet.VideoConfig? = null
+
+    fun start(presetId: Int): Boolean {
         synchronized(lock) {
             stopLocked()
-            preset = presetOf(presetId)
-            val size = scaledSize(deviceWidth, deviceHeight, preset.longSide)
-            val encoder = openEncoder(size, preset)
-            val input = encoder.createInputSurface()
-            encoder.start()
-            val virtual = projection.createVirtualDisplay(
-                "atcast",
-                size.width,
-                size.height,
-                densityDpi,
-                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                input,
-                null,
-                null,
-            )
-            codec = encoder
-            surface = input
-            display = virtual
-            running = true
-            thread = Thread({ drainLoop(encoder, size) }, "atcast-video").also { it.start() }
+            val chosen = presetOf(presetId)
+            preset = chosen
+            val requested = scaledSize(deviceWidth, deviceHeight, chosen.longSide)
+            val sizes = listOf(
+                requested,
+                scaledSize(deviceWidth, deviceHeight, 1280),
+                scaledSize(deviceWidth, deviceHeight, 960),
+            ).distinctBy { size -> size.width to size.height }
+            for (size in sizes) {
+                if (tryStart(size, chosen)) {
+                    return true
+                }
+            }
+            running = false
+            return false
         }
+    }
+
+    fun replayConfig() {
+        val config = lastConfig ?: return
+        send(config)
     }
 
     fun requestKeyframe() {
@@ -65,8 +69,12 @@ class VideoPipeline(
         }
     }
 
-    fun changePreset(presetId: Int) {
-        start(presetId)
+    fun changePreset(presetId: Int): Boolean {
+        // 接続直後の同じ画質指定で仮想ディスプレイを作り直すと、端末によってはプロセスごと落ちる。
+        if (running && preset.id == presetId) {
+            return true
+        }
+        return start(presetId)
     }
 
     fun stop() {
@@ -92,28 +100,121 @@ class VideoPipeline(
         codec = null
     }
 
-    private fun openEncoder(size: FrameSize, preset: StreamPreset): MediaCodec {
+    private fun tryStart(size: FrameSize, chosen: StreamPreset): Boolean {
+        val opened = openEncoder(size, chosen) ?: return false
+        val encoder = opened.first
+        val fitted = opened.second
+        var input: Surface? = null
+        var virtual: android.hardware.display.VirtualDisplay? = null
         try {
-            return createConfigured(size, preset, aggressive = true)
-        } catch (_: Exception) {
-            // 低遅延オプションを拒否する機種は、ベースライン設定でもう一度作る。
-            return createConfigured(size, preset, aggressive = false)
+            input = encoder.createInputSurface()
+            encoder.start()
+            virtual = projection.createVirtualDisplay(
+                "atcast",
+                fitted.width,
+                fitted.height,
+                densityDpi.coerceAtLeast(1),
+                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                input,
+                null,
+                null,
+            )
+            codec = encoder
+            surface = input
+            display = virtual
+            running = true
+            val worker = Thread({ drainLoop(encoder, fitted) }, "atcast-video")
+            worker.setUncaughtExceptionHandler { _, error ->
+                running = false
+                Log.e(TAG, "video drain failed", error)
+            }
+            thread = worker
+            worker.start()
+            return true
+        } catch (error: Exception) {
+            Log.e(TAG, "video start failed ${fitted.width}x${fitted.height}", error)
+            running = false
+            if (codec === encoder) {
+                codec = null
+                surface = null
+                display = null
+            }
+            try {
+                virtual?.release()
+            } catch (_: Exception) {
+            }
+            try {
+                encoder.stop()
+            } catch (_: Exception) {
+            }
+            input?.release()
+            encoder.release()
+            return false
         }
     }
 
-    private fun createConfigured(size: FrameSize, preset: StreamPreset, aggressive: Boolean): MediaCodec {
-        val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+    private fun openEncoder(size: FrameSize, preset: StreamPreset): Pair<MediaCodec, FrameSize>? {
+        val aggressive = createConfigured(size, preset, aggressive = true)
+        if (aggressive != null) {
+            return aggressive
+        }
+        // 低遅延オプションを拒否する機種は、色とビットレートだけの設定で作り直す。
+        return createConfigured(size, preset, aggressive = false)
+    }
+
+    private fun createConfigured(
+        size: FrameSize,
+        preset: StreamPreset,
+        aggressive: Boolean,
+    ): Pair<MediaCodec, FrameSize>? {
+        val encoder = try {
+            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        } catch (error: Exception) {
+            Log.e(TAG, "encoder missing", error)
+            return null
+        }
+        val fitted = fit(encoder, size)
         try {
             encoder.configure(
-                baseFormat(size, preset, aggressive),
+                baseFormat(fitted, preset, aggressive),
                 null,
                 null,
                 MediaCodec.CONFIGURE_FLAG_ENCODE,
             )
-            return encoder
+            return encoder to fitted
         } catch (error: Exception) {
+            Log.e(TAG, "encoder configure failed aggressive=$aggressive", error)
             encoder.release()
-            throw error
+            return null
+        }
+    }
+
+    private fun fit(encoder: MediaCodec, requested: FrameSize): FrameSize {
+        val width16 = (requested.width / 16) * 16
+        val height16 = (requested.height / 16) * 16
+        val aligned = FrameSize(width16.coerceAtLeast(16), height16.coerceAtLeast(16))
+        val caps = try {
+            encoder.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+        } catch (_: Exception) {
+            null
+        } ?: return aligned
+        return try {
+            var width = aligned.width.coerceIn(caps.supportedWidths.lower, caps.supportedWidths.upper)
+            val alignW = caps.widthAlignment.coerceAtLeast(2)
+            width = width / alignW * alignW
+            if (width < alignW) {
+                width = alignW
+            }
+            val heights = caps.getSupportedHeightsFor(width)
+            var height = aligned.height.coerceIn(heights.lower, heights.upper)
+            val alignH = caps.heightAlignment.coerceAtLeast(2)
+            height = height / alignH * alignH
+            if (height < alignH) {
+                height = alignH
+            }
+            FrameSize(width.coerceAtLeast(16), height.coerceAtLeast(16))
+        } catch (_: Exception) {
+            aligned
         }
     }
 
@@ -141,7 +242,7 @@ class VideoPipeline(
                             val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                             val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                             if (config) {
-                                send(Packet.VideoConfig(size.width, size.height, annex))
+                                publishConfig(Packet.VideoConfig(size.width, size.height, annex))
                             } else {
                                 send(Packet.Video(info.presentationTimeUs, key, annex))
                             }
@@ -173,7 +274,12 @@ class VideoPipeline(
         if (pps != null && ppsSize > 0) {
             pps.get(merged, spsSize, ppsSize)
         }
-        send(Packet.VideoConfig(size.width, size.height, toAnnexB(merged)))
+        publishConfig(Packet.VideoConfig(size.width, size.height, toAnnexB(merged)))
+    }
+
+    private fun publishConfig(config: Packet.VideoConfig) {
+        lastConfig = config
+        send(config)
     }
 
     private fun baseFormat(size: FrameSize, preset: StreamPreset, aggressive: Boolean): MediaFormat {
@@ -190,10 +296,6 @@ class VideoPipeline(
         format.setInteger(MediaFormat.KEY_FRAME_RATE, preset.fps)
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
         if (!aggressive) {
-            format.setInteger(
-                MediaFormat.KEY_PROFILE,
-                MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
-            )
             return format
         }
         format.setInteger(
@@ -206,10 +308,12 @@ class VideoPipeline(
         if (Build.VERSION.SDK_INT >= 29) {
             format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
         }
-        if (Build.VERSION.SDK_INT >= 30) {
-            format.setInteger(MediaFormat.KEY_LATENCY, 1)
-        }
-        format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 500_000)
+        // KEY_LATENCY と REPEAT_PREVIOUS_FRAME_AFTER は configure が成功したあとに
+        // ネイティブ側で落ちる機種があるため、最初から付けない。
         return format
+    }
+
+    companion object {
+        private const val TAG = "atcast"
     }
 }

@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private bool fullscreen;
     private bool refreshing;
     private long lastKeyframeRequest;
+    private ObsWindow? obsWindow;
     private WindowStyle previousStyle;
     private WindowState previousState;
 
@@ -53,6 +54,7 @@ public partial class MainWindow : Window
             timer.Stop();
             discovery.Dispose();
             CloseSession();
+            CloseObs();
         };
     }
 
@@ -278,6 +280,7 @@ public partial class MainWindow : Window
         {
             bitmap = new WriteableBitmap(width, height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
             VideoImage.Source = bitmap;
+            obsWindow?.ShowFrame(bitmap);
         }
 
         bitmap.WritePixels(new Int32Rect(0, 0, width, height), frame, width * 4, 0);
@@ -368,6 +371,38 @@ public partial class MainWindow : Window
     }
 
     private void FullscreenButton_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
+
+    private void ObsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (obsWindow != null)
+        {
+            obsWindow.Activate();
+            return;
+        }
+
+        var window = new ObsWindow();
+        window.Closed += (_, _) =>
+        {
+            if (obsWindow == window)
+            {
+                obsWindow = null;
+            }
+        };
+        obsWindow = window;
+        if (bitmap != null)
+        {
+            window.ShowFrame(bitmap);
+        }
+
+        window.Show();
+    }
+
+    private void CloseObs()
+    {
+        var window = obsWindow;
+        obsWindow = null;
+        window?.Close();
+    }
 
     private void ToggleFullscreen()
     {

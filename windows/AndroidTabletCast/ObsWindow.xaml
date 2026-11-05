@@ -1,0 +1,10 @@
+<Window x:Class="AndroidTabletCast.ObsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="タブレット映像（OBS）"
+        Width="1280"
+        Height="720"
+        Background="Black"
+        ResizeMode="CanResize">
+    <Image x:Name="VideoImage" Stretch="Uniform" />
+</Window>
