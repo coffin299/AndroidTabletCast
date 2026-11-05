@@ -42,7 +42,9 @@ public class ProtocolTests
         Assert.Equal(ProtocolLimits.AuthLocked, Assert.IsType<AuthResultPacket>(packets[7]).Code);
         Assert.Equal("Desk", Assert.IsType<TrustRequestPacket>(packets[8]).Name);
         Assert.Equal(32, Assert.IsType<TrustGrantPacket>(packets[9]).Token.Length);
-        Assert.Equal(1920, Assert.IsType<VideoConfigPacket>(packets[10]).Width);
+        var videoConfig = Assert.IsType<VideoConfigPacket>(packets[10]);
+        Assert.Equal(ProtocolLimits.CodecAvc, videoConfig.Codec);
+        Assert.Equal(1920, videoConfig.Width);
         var video = Assert.IsType<VideoPacket>(packets[11]);
         Assert.Equal(1000, video.PtsUs);
         Assert.True(video.Keyframe);

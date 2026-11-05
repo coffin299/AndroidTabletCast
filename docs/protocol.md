@@ -13,14 +13,14 @@
 | 3 | AUTH_RESULT | タブレット → PC | `u8 code`。0 成功、1 PIN 不一致、2 未信頼、3 信頼モードオフ、4 ロック |
 | 4 | TRUST_GRANT | タブレット → PC | `u8[16] tabletId`, `u8[32] token` |
 | 5 | TRUST_REQUEST | PC → タブレット | `u8[16] pcId`, `u8 nameLength`, `utf8 name` |
-| 16 | VIDEO_CONFIG | タブレット → PC | `u16 width`, `u16 height`, Annex-B（SPS/PPS） |
+| 16 | VIDEO_CONFIG | タブレット → PC | `u8 codec`（0 = H.264、1 = HEVC）、`u16 width`、`u16 height`、Annex-B（HEVC は VPS/SPS/PPS） |
 | 17 | VIDEO | タブレット → PC | `u64 ptsUs`, `u8 keyframe`, Annex-B |
 | 18 | AUDIO_CONFIG | タブレット → PC | `u32 sampleRate`, `u8 channels`, AudioSpecificConfig |
 | 19 | AUDIO | タブレット → PC | `u64 ptsUs`, raw AAC |
 | 32 | INPUT_TOUCH | PC → タブレット | `u8 action`, `u16 x`, `u16 y`。action は 0 down、1 move、2 up、3 cancel。座標は映像内の 0〜65535 |
 | 33 | INPUT_KEY | PC → タブレット | `u8 action`, `u16 keyCode`, `u32 meta`。action は 0 down、1 up |
 | 34 | INPUT_SCROLL | PC → タブレット | `u16 x`, `u16 y`, `i16 delta` |
-| 48 | STREAM_CONFIG | PC → タブレット | `u8 preset`。0 低遅延、1 バランス、2 高画質 |
+| 48 | STREAM_CONFIG | PC → タブレット | `u8 preset`。0 低遅延、1 バランス、2 高画質、3 最高画質 |
 | 49 | REQUEST_KEYFRAME | PC → タブレット | 空 |
 | 126 | PING | PC → タブレット | `u64 clientUnixMs` |
 | 127 | PONG | タブレット → PC | `u64 clientUnixMs`, `u64 serverUnixMs` |
@@ -47,8 +47,9 @@ UDP payload は `ATC1`、`u16 tcpPort`、`u8[16] tabletId`、`u8 nameLength`、�
 
 - 低遅延: 長辺 1280、30fps、4Mbps
 - バランス: 長辺 1920、60fps、10Mbps
-- 高画質: 長辺 2560、60fps、20Mbps
+- 高画質: 長辺 3840、60fps、30Mbps
+- 最高画質: 長辺 3840、60fps、120Mbps
 
-エンコーダは B フレームなし、可能なら CBR と低遅延優先。初期プリセットは高画質。
+エンコーダは B フレームなし、可能なら CBR と低遅延優先。HEVC のハードウェアエンコーダがそのサイズを受け付けるときは H.265、そうでなければ H.264。指定ビットレートを拒む機種は、解像度を下げる前に半分のビットレートで同じサイズを試す。初期プリセットは最高画質。
 
 共通バイト列は `protocol/fixtures/packets.bin` と `protocol/fixtures/beacon.bin`。再生成は `protocol/generate-fixtures.ps1`。

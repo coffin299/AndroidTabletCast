@@ -47,6 +47,9 @@ public static class ProtocolLimits
     public const int PresetLowLatency = 0;
     public const int PresetBalanced = 1;
     public const int PresetHighQuality = 2;
+
+    public const int CodecAvc = 0;
+    public const int CodecHevc = 1;
 }
 
 public sealed class ProtocolException : Exception
@@ -100,7 +103,7 @@ public sealed record TrustRequestPacket(byte[] PcId, string Name) : Packet
     public override int Type => ProtocolLimits.TrustRequest;
 }
 
-public sealed record VideoConfigPacket(int Width, int Height, byte[] AnnexB) : Packet
+public sealed record VideoConfigPacket(int Codec, int Width, int Height, byte[] AnnexB) : Packet
 {
     public override int Type => ProtocolLimits.VideoConfig;
 }
@@ -205,7 +208,7 @@ public static class Protocol
             ProtocolLimits.AuthResult => new AuthResultPacket(reader.U8()),
             ProtocolLimits.TrustGrant => new TrustGrantPacket(reader.Bytes(ProtocolLimits.IdBytes), reader.Bytes(ProtocolLimits.TokenBytes)),
             ProtocolLimits.TrustRequest => new TrustRequestPacket(reader.Bytes(ProtocolLimits.IdBytes), ReadName(reader)),
-            ProtocolLimits.VideoConfig => new VideoConfigPacket(reader.U16(), reader.U16(), reader.Rest()),
+            ProtocolLimits.VideoConfig => new VideoConfigPacket(reader.U8(), reader.U16(), reader.U16(), reader.Rest()),
             ProtocolLimits.Video => new VideoPacket(reader.U64(), reader.U8() != 0, reader.Rest()),
             ProtocolLimits.AudioConfig => new AudioConfigPacket((int)reader.U32(), reader.U8(), reader.Rest()),
             ProtocolLimits.Audio => new AudioPacket(reader.U64(), reader.Rest()),
@@ -311,6 +314,7 @@ public static class Protocol
                 WriteName(writer, request.Name);
                 break;
             case VideoConfigPacket videoConfig:
+                writer.U8(videoConfig.Codec);
                 writer.U16(videoConfig.Width);
                 writer.U16(videoConfig.Height);
                 writer.Bytes(videoConfig.AnnexB);

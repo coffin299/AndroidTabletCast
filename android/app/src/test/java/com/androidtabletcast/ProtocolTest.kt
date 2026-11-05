@@ -50,7 +50,9 @@ class ProtocolTest {
         assertEquals(AUTH_LOCKED, (packets[7] as Packet.AuthResult).code)
         assertEquals("Desk", (packets[8] as Packet.TrustRequest).name)
         assertEquals(32, (packets[9] as Packet.TrustGrant).token.size)
-        assertEquals(1920, (packets[10] as Packet.VideoConfig).width)
+        val videoConfig = packets[10] as Packet.VideoConfig
+        assertEquals(CODEC_AVC, videoConfig.codec)
+        assertEquals(1920, videoConfig.width)
         val video = packets[11] as Packet.Video
         assertEquals(1000L, video.ptsUs)
         assertTrue(video.keyframe)

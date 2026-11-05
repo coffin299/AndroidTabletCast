@@ -2,6 +2,7 @@ package com.androidtabletcast
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.projection.MediaProjection
 import android.os.Build
@@ -34,6 +35,7 @@ class VideoPipeline(
 
     private var activeWidth = 0
     private var activeHeight = 0
+    private var codecId = CODEC_AVC
 
     fun start(presetId: Int): Boolean {
         synchronized(lock) {
@@ -41,12 +43,22 @@ class VideoPipeline(
             val chosen = presetOf(presetId)
             preset = chosen
             val requested = scaledSize(deviceWidth, deviceHeight, chosen.longSide)
+            val rates = listOf(chosen.bitrate, chosen.bitrate / 2).distinct()
+            for (rate in rates) {
+                val attempt = chosen.copy(bitrate = rate)
+                if (tryStart(requested, attempt)) {
+                    preset = attempt
+                    return true
+                }
+            }
             val sizes = listOf(
-                requested,
                 scaledSize(deviceWidth, deviceHeight, 1280),
                 scaledSize(deviceWidth, deviceHeight, 960),
             ).distinctBy { size -> size.width to size.height }
             for (size in sizes) {
+                if (size.width == requested.width && size.height == requested.height) {
+                    continue
+                }
                 if (tryStart(size, chosen)) {
                     return true
                 }
@@ -178,47 +190,98 @@ class VideoPipeline(
     }
 
     private fun openEncoder(size: FrameSize, preset: StreamPreset): Pair<MediaCodec, FrameSize>? {
-        val aggressive = createConfigured(size, preset, aggressive = true)
+        val preferred = if (hardwareSupports(MediaFormat.MIMETYPE_VIDEO_HEVC, size)) {
+            MediaFormat.MIMETYPE_VIDEO_HEVC
+        } else {
+            MediaFormat.MIMETYPE_VIDEO_AVC
+        }
+        val opened = configureMime(preferred, size, preset)
+        if (opened != null) {
+            codecId = if (preferred == MediaFormat.MIMETYPE_VIDEO_HEVC) CODEC_HEVC else CODEC_AVC
+            return opened
+        }
+        if (preferred != MediaFormat.MIMETYPE_VIDEO_AVC) {
+            val fallback = configureMime(MediaFormat.MIMETYPE_VIDEO_AVC, size, preset)
+            if (fallback != null) {
+                codecId = CODEC_AVC
+                return fallback
+            }
+        }
+        return null
+    }
+
+    private fun configureMime(mime: String, size: FrameSize, preset: StreamPreset): Pair<MediaCodec, FrameSize>? {
+        val aggressive = createConfigured(mime, size, preset, aggressive = true)
         if (aggressive != null) {
             return aggressive
         }
         // 低遅延オプションを拒否する機種は、色とビットレートだけの設定で作り直す。
-        return createConfigured(size, preset, aggressive = false)
+        return createConfigured(mime, size, preset, aggressive = false)
+    }
+
+    private fun hardwareSupports(mime: String, size: FrameSize): Boolean {
+        val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+        for (info in list.codecInfos) {
+            if (!info.isEncoder || !info.supportedTypes.any { type -> type.equals(mime, ignoreCase = true) }) {
+                continue
+            }
+            val software = info.name.startsWith("OMX.google.") || info.name.startsWith("c2.android.")
+            if (Build.VERSION.SDK_INT >= 29) {
+                if (!info.isHardwareAccelerated || software) {
+                    continue
+                }
+            } else if (software) {
+                continue
+            }
+            val video = try {
+                info.getCapabilitiesForType(mime).videoCapabilities
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            if (video.isSizeSupported(size.width, size.height)) {
+                return true
+            }
+            if (size.width >= video.supportedWidths.lower && size.height >= video.supportedHeights.lower) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun createConfigured(
+        mime: String,
         size: FrameSize,
         preset: StreamPreset,
         aggressive: Boolean,
     ): Pair<MediaCodec, FrameSize>? {
         val encoder = try {
-            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            MediaCodec.createEncoderByType(mime)
         } catch (error: Exception) {
-            Log.e(TAG, "encoder missing", error)
+            Log.e(TAG, "encoder missing $mime", error)
             return null
         }
-        val fitted = fit(encoder, size)
+        val fitted = fit(encoder, mime, size)
         try {
             encoder.configure(
-                baseFormat(fitted, preset, aggressive),
+                baseFormat(mime, fitted, preset, aggressive),
                 null,
                 null,
                 MediaCodec.CONFIGURE_FLAG_ENCODE,
             )
             return encoder to fitted
         } catch (error: Exception) {
-            Log.e(TAG, "encoder configure failed aggressive=$aggressive", error)
+            Log.e(TAG, "encoder configure failed $mime aggressive=$aggressive", error)
             encoder.release()
             return null
         }
     }
 
-    private fun fit(encoder: MediaCodec, requested: FrameSize): FrameSize {
+    private fun fit(encoder: MediaCodec, mime: String, requested: FrameSize): FrameSize {
         val width16 = (requested.width / 16) * 16
         val height16 = (requested.height / 16) * 16
         val aligned = FrameSize(width16.coerceAtLeast(16), height16.coerceAtLeast(16))
         val caps = try {
-            encoder.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+            encoder.codecInfo.getCapabilitiesForType(mime).videoCapabilities
         } catch (_: Exception) {
             null
         } ?: return aligned
@@ -266,7 +329,7 @@ class VideoPipeline(
                             val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                             val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                             if (config) {
-                                publishConfig(Packet.VideoConfig(size.width, size.height, annex))
+                                publishConfig(Packet.VideoConfig(codecId, size.width, size.height, annex))
                             } else {
                                 send(Packet.Video(info.presentationTimeUs, key, annex))
                             }
@@ -281,32 +344,38 @@ class VideoPipeline(
     }
 
     private fun sendCodecConfig(format: MediaFormat, size: FrameSize) {
-        val sps = try {
-            format.getByteBuffer("csd-0")
-        } catch (_: Exception) {
-            null
-        } ?: return
-        val pps = try {
-            format.getByteBuffer("csd-1")
-        } catch (_: Exception) {
-            null
+        val parts = ArrayList<ByteArray>()
+        // HEVC は VPS が csd-2 に分かれる機種がある。VPS、SPS、PPS の順でつなぐ。
+        for (key in arrayOf("csd-2", "csd-0", "csd-1")) {
+            val buffer = try {
+                format.getByteBuffer(key)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            if (buffer.remaining() > 0) {
+                parts.add(nalBytes(buffer))
+            }
         }
-        val spsBytes = ByteArray(sps.remaining())
-        sps.get(spsBytes)
-        val spsNal = ensureAnnexB(spsBytes)
-        val ppsNal = if (pps != null && pps.remaining() > 0) {
-            val raw = ByteArray(pps.remaining())
-            pps.get(raw)
-            ensureAnnexB(raw)
-        } else {
-            ByteArray(0)
+        if (parts.isEmpty()) {
+            return
         }
-        val merged = ByteArray(spsNal.size + ppsNal.size)
-        System.arraycopy(spsNal, 0, merged, 0, spsNal.size)
-        if (ppsNal.isNotEmpty()) {
-            System.arraycopy(ppsNal, 0, merged, spsNal.size, ppsNal.size)
+        var total = 0
+        for (part in parts) {
+            total += part.size
         }
-        publishConfig(Packet.VideoConfig(size.width, size.height, merged))
+        val merged = ByteArray(total)
+        var offset = 0
+        for (part in parts) {
+            System.arraycopy(part, 0, merged, offset, part.size)
+            offset += part.size
+        }
+        publishConfig(Packet.VideoConfig(codecId, size.width, size.height, merged))
+    }
+
+    private fun nalBytes(buffer: java.nio.ByteBuffer): ByteArray {
+        val raw = ByteArray(buffer.remaining())
+        buffer.get(raw)
+        return ensureAnnexB(raw)
     }
 
     private fun publishConfig(config: Packet.VideoConfig) {
@@ -314,9 +383,9 @@ class VideoPipeline(
         send(config)
     }
 
-    private fun baseFormat(size: FrameSize, preset: StreamPreset, aggressive: Boolean): MediaFormat {
+    private fun baseFormat(mime: String, size: FrameSize, preset: StreamPreset, aggressive: Boolean): MediaFormat {
         val format = MediaFormat.createVideoFormat(
-            MediaFormat.MIMETYPE_VIDEO_AVC,
+            mime,
             size.width,
             size.height,
         )

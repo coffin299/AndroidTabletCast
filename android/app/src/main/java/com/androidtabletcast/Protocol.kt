@@ -51,6 +51,10 @@ const val TOUCH_CANCEL = 3
 const val PRESET_LOW_LATENCY = 0
 const val PRESET_BALANCED = 1
 const val PRESET_HIGH_QUALITY = 2
+const val PRESET_MAX_QUALITY = 3
+
+const val CODEC_AVC = 0
+const val CODEC_HEVC = 1
 
 sealed class Packet {
     abstract val type: Int
@@ -89,7 +93,7 @@ sealed class Packet {
         override val type: Int = TYPE_TRUST_REQUEST
     }
 
-    data class VideoConfig(val width: Int, val height: Int, val annexB: ByteArray) : Packet() {
+    data class VideoConfig(val codec: Int, val width: Int, val height: Int, val annexB: ByteArray) : Packet() {
         override val type: Int = TYPE_VIDEO_CONFIG
     }
 
@@ -256,7 +260,7 @@ object Protocol {
             TYPE_AUTH_RESULT -> Packet.AuthResult(reader.u8())
             TYPE_TRUST_GRANT -> Packet.TrustGrant(reader.bytes(ID_BYTES), reader.bytes(TOKEN_BYTES))
             TYPE_TRUST_REQUEST -> readTrustRequest(reader)
-            TYPE_VIDEO_CONFIG -> Packet.VideoConfig(reader.u16(), reader.u16(), reader.rest())
+            TYPE_VIDEO_CONFIG -> Packet.VideoConfig(reader.u8(), reader.u16(), reader.u16(), reader.rest())
             TYPE_VIDEO -> Packet.Video(reader.u64(), reader.u8() != 0, reader.rest())
             TYPE_AUDIO_CONFIG -> Packet.AudioConfig(reader.u32().toInt(), reader.u8(), reader.rest())
             TYPE_AUDIO -> Packet.Audio(reader.u64(), reader.rest())
@@ -353,6 +357,7 @@ object Protocol {
                 writeName(writer, packet.name)
             }
             is Packet.VideoConfig -> {
+                writer.u8(packet.codec)
                 writer.u16(packet.width)
                 writer.u16(packet.height)
                 writer.bytes(packet.annexB)
@@ -506,7 +511,8 @@ fun presetOf(id: Int): StreamPreset {
     return when (id) {
         PRESET_LOW_LATENCY -> StreamPreset(PRESET_LOW_LATENCY, 1280, 30, 4_000_000)
         PRESET_BALANCED -> StreamPreset(PRESET_BALANCED, 1920, 60, 10_000_000)
-        else -> StreamPreset(PRESET_HIGH_QUALITY, 2560, 60, 20_000_000)
+        PRESET_MAX_QUALITY -> StreamPreset(PRESET_MAX_QUALITY, 3840, 60, 120_000_000)
+        else -> StreamPreset(PRESET_HIGH_QUALITY, 3840, 60, 30_000_000)
     }
 }
 

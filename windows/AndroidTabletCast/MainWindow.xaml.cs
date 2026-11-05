@@ -157,7 +157,7 @@ public partial class MainWindow : Window
             case VideoConfigPacket config:
                 try
                 {
-                    decoder?.Open(config.AnnexB, config.Width, config.Height);
+                    decoder?.Open(config.Codec, config.AnnexB, config.Width, config.Height);
                 }
                 catch (Exception error)
                 {

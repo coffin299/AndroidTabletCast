@@ -81,6 +81,20 @@
             android:orientation="vertical" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/overlayButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="他のアプリの上に表示を許可" />
+
+        <TextView
+            android:id="@+id/overlayState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#8AA0AE" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/accessibilityButton"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="match_parent"

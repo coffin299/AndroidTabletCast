@@ -15,6 +15,7 @@ public sealed unsafe class VideoDecoder : IDisposable
     private AVPixelFormat scaledFormat;
     private bool open;
     private byte[] parameterSets = Array.Empty<byte>();
+    private int codecId;
     private static int nativeReady;
 
     public static string? ProbeNative()
@@ -47,23 +48,27 @@ public sealed unsafe class VideoDecoder : IDisposable
         }
     }
 
-    public void Open(byte[] annexB, int width, int height)
+    public void Open(int codec, byte[] annexB, int width, int height)
     {
         EnsureNative();
         Close();
-        var codec = ffmpeg.avcodec_find_decoder(AVCodecID.AV_CODEC_ID_H264);
-        if (codec == null)
+        codecId = codec;
+        var codecIdFfmpeg = codec == ProtocolLimits.CodecHevc
+            ? AVCodecID.AV_CODEC_ID_HEVC
+            : AVCodecID.AV_CODEC_ID_H264;
+        var decoder = ffmpeg.avcodec_find_decoder(codecIdFfmpeg);
+        if (decoder == null)
         {
-            throw new InvalidOperationException("H.264 デコーダがありません");
+            throw new InvalidOperationException("映像デコーダがありません");
         }
 
-        context = ffmpeg.avcodec_alloc_context3(codec);
+        context = ffmpeg.avcodec_alloc_context3(decoder);
         context->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
         context->thread_count = 1;
         context->width = width;
         context->height = height;
         // annex-B を extradata に入れると FFmpeg が同期できず、画面が真っ黒になる。
-        Check(ffmpeg.avcodec_open2(context, codec, null));
+        Check(ffmpeg.avcodec_open2(context, decoder, null));
         frame = ffmpeg.av_frame_alloc();
         packet = ffmpeg.av_packet_alloc();
         open = true;
@@ -121,7 +126,7 @@ public sealed unsafe class VideoDecoder : IDisposable
         return merged;
     }
 
-    private static bool StartsWithParameterSet(byte[] data)
+    private bool StartsWithParameterSet(byte[] data)
     {
         var index = 0;
         if (data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
@@ -142,7 +147,14 @@ public sealed unsafe class VideoDecoder : IDisposable
             return false;
         }
 
-        var nal = data[index] & 0x1F;
+        var header = data[index];
+        if (codecId == ProtocolLimits.CodecHevc)
+        {
+            var hevc = (header >> 1) & 0x3F;
+            return hevc is 32 or 33 or 34;
+        }
+
+        var nal = header & 0x1F;
         return nal is 7 or 8;
     }
 

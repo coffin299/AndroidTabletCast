@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -68,6 +69,13 @@ class MainActivity : AppCompatActivity() {
                 beginCapture()
             }
         }
+        findViewById<MaterialButton>(R.id.overlayButton).setOnClickListener {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName"),
+            )
+            startActivity(intent)
+        }
         findViewById<MaterialButton>(R.id.accessibilityButton).setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
@@ -124,6 +132,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderPermissions() {
+        findViewById<TextView>(R.id.overlayState).text = if (Settings.canDrawOverlays(this)) {
+            "他のアプリの上に表示: 許可済み"
+        } else {
+            "他のアプリの上に表示: 未許可（許可すると前面のアプリでも収録が安定します）"
+        }
         findViewById<TextView>(R.id.accessibilityState).text = if (accessibilityEnabled(this)) {
             "ユーザー補助: 有効"
         } else {

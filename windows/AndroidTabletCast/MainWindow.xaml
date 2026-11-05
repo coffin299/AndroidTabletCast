@@ -38,10 +38,11 @@
                     <TextBox x:Name="PortBox" Margin="0,4,0,8" Text="39721" />
                     <TextBlock Text="PIN（信頼モードがオンなら不要）" />
                     <TextBox x:Name="PinBox" Margin="0,4,0,8" />
-                    <ComboBox x:Name="PresetBox" SelectedIndex="2" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
+                    <ComboBox x:Name="PresetBox" SelectedIndex="3" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
                         <ComboBoxItem Content="低遅延" />
                         <ComboBoxItem Content="バランス" />
                         <ComboBoxItem Content="高画質" />
+                        <ComboBoxItem Content="最高画質" />
                     </ComboBox>
                     <CheckBox x:Name="HoverBox" Content="ボタンを離した移動も送る（Shizuku 向け）" Margin="0,0,0,8" />
                     <CheckBox x:Name="MuteBox" Content="音声をミュート" Checked="MuteBox_Changed" Unchecked="MuteBox_Changed" Margin="0,0,0,8" />

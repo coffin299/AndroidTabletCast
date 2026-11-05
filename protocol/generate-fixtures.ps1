@@ -76,6 +76,7 @@ Add-Raw $token
 Flush-Frame 4
 
 $annex = [byte[]](0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1E, 0, 0, 0, 1, 0x68, 0xCE, 0x06, 0xE2)
+Add-U8 0
 Add-U16 1920
 Add-U16 1080
 Add-Raw $annex

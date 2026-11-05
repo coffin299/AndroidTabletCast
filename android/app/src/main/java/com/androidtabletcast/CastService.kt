@@ -14,11 +14,16 @@ import android.net.wifi.WifiManager
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import java.util.concurrent.CopyOnWriteArrayList
@@ -63,8 +68,9 @@ class CastService : Service(), StreamEvents {
     private var router: InputRouter? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicast: WifiManager.MulticastLock? = null
-    private var desiredPreset = PRESET_HIGH_QUALITY
+    private var desiredPreset = PRESET_MAX_QUALITY
     private var releasing = false
+    private var overlay: TextView? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -198,6 +204,7 @@ class CastService : Service(), StreamEvents {
         server = stream
         // 画面収録の許可の直後、アプリが前面にあるうちにエンコーダを開始する。
         val videoReady = startVideo(desiredPreset)
+        showOverlay()
         CastStatus.update {
             it.copy(
                 running = true,
@@ -267,6 +274,7 @@ class CastService : Service(), StreamEvents {
         releasing = true
         try {
             stopPipelines()
+            hideOverlay()
             server?.stop()
             server = null
             val current = projection
@@ -302,6 +310,42 @@ class CastService : Service(), StreamEvents {
         multicast = wifi?.createMulticastLock("atcast")?.apply {
             setReferenceCounted(false)
             acquire()
+        }
+    }
+
+    private fun showOverlay() {
+        if (overlay != null || !Settings.canDrawOverlays(this)) {
+            return
+        }
+        val chip = TextView(this)
+        chip.text = "配信中"
+        chip.setTextColor(0xFFE8EEF2.toInt())
+        chip.setPadding(28, 12, 28, 12)
+        chip.setBackgroundColor(0xCC101418.toInt())
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        )
+        params.gravity = Gravity.TOP or Gravity.END
+        params.x = 24
+        params.y = 24
+        try {
+            getSystemService(WindowManager::class.java).addView(chip, params)
+            overlay = chip
+        } catch (error: Exception) {
+            Log.e(TAG, "overlay failed", error)
+        }
+    }
+
+    private fun hideOverlay() {
+        val chip = overlay ?: return
+        overlay = null
+        try {
+            getSystemService(WindowManager::class.java).removeView(chip)
+        } catch (_: Exception) {
         }
     }
 
