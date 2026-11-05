@@ -37,6 +37,7 @@ class VideoPipeline(
     private var activeWidth = 0
     private var activeHeight = 0
     private var codecId = CODEC_AVC
+    private var loggedOutputFrames = 0
 
     fun start(presetId: Int): Boolean {
         synchronized(lock) {
@@ -152,6 +153,7 @@ class VideoPipeline(
         val chosen = presetOf(presetId)
         preset = chosen
         val requested = scaledSize(deviceWidth, deviceHeight, chosen.longSide)
+        Log.i(TAG, "starting video preset=$presetId size=${requested.width}x${requested.height} codecPreference=$codecPreference")
         val rates = listOf(chosen.bitrate, chosen.bitrate / 2).distinct()
         for (rate in rates) {
             val attempt = chosen.copy(bitrate = rate)
@@ -213,6 +215,7 @@ class VideoPipeline(
             surface = input
             display = targetDisplay
             running = true
+            Log.i(TAG, "video encoder started name=${encoder.name} size=${fitted.width}x${fitted.height}")
             val worker = Thread({ drainLoop(encoder, fitted) }, "atcast-video")
             worker.setUncaughtExceptionHandler { _, error ->
                 running = false
@@ -391,6 +394,7 @@ class VideoPipeline(
             try {
                 when {
                     index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        Log.i(TAG, "video output format changed: ${encoder.outputFormat}")
                         sendCodecConfig(encoder.outputFormat, size)
                     }
                     index >= 0 -> {
@@ -403,6 +407,10 @@ class VideoPipeline(
                             val annex = ensureAnnexB(bytes)
                             val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                             val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                            if (loggedOutputFrames < 5 || key || config) {
+                                Log.i(TAG, "video output bytes=${annex.size} key=$key config=$config pts=${info.presentationTimeUs}")
+                                loggedOutputFrames++
+                            }
                             if (config) {
                                 publishConfig(Packet.VideoConfig(codecId, size.width, size.height, annex))
                             } else {
@@ -412,7 +420,8 @@ class VideoPipeline(
                         encoder.releaseOutputBuffer(index, false)
                     }
                 }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.e(TAG, "video output processing failed index=$index size=${info.size}", error)
                 break
             }
         }
@@ -432,6 +441,7 @@ class VideoPipeline(
             }
         }
         if (parts.isEmpty()) {
+            Log.e(TAG, "video output format has no codec-specific data: $format")
             return
         }
         var total = 0
@@ -455,6 +465,7 @@ class VideoPipeline(
 
     private fun publishConfig(config: Packet.VideoConfig) {
         lastConfig = config
+        Log.i(TAG, "publishing video config codec=${config.codec} size=${config.width}x${config.height} bytes=${config.annexB.size}")
         send(config)
     }
 
