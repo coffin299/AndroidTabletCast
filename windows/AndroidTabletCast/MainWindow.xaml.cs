@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,6 +13,9 @@ public partial class MainWindow : Window
     private readonly Discovery discovery = new();
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly object frameGate = new();
+    private readonly object decoderGate = new();
+    private readonly object videoQueueGate = new();
+    private readonly BlockingCollection<Packet> videoPackets = new(new ConcurrentQueue<Packet>(), 12);
     private StreamClient? session;
     private VideoDecoder? decoder;
     private AudioOutput? audio;
@@ -26,6 +30,8 @@ public partial class MainWindow : Window
     private bool firstVideoFrameReceived;
     private bool fullscreen;
     private bool refreshing;
+    private bool waitingForVideoKeyframe = true;
+    private VideoConfigPacket? latestVideoConfig;
     private long lastKeyframeRequest;
     private ObsWindow? obsWindow;
     private WindowStyle previousStyle;
@@ -34,6 +40,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _ = Task.Run(ProcessVideoPackets);
         var missing = VideoDecoder.ProbeNative();
         if (missing != null)
         {
@@ -56,6 +63,7 @@ public partial class MainWindow : Window
             timer.Stop();
             discovery.Dispose();
             CloseSession();
+            videoPackets.CompleteAdding();
             CloseObs();
         };
     }
@@ -111,7 +119,10 @@ public partial class MainWindow : Window
         decoderErrorReported = false;
         firstVideoFrameReceived = false;
         var client = new StreamClient();
-        decoder = new VideoDecoder();
+        lock (decoderGate)
+        {
+            decoder = new VideoDecoder((VideoDecodeMode)DecoderModeBox.SelectedIndex);
+        }
         audio = new AudioOutput { Muted = MuteBox.IsChecked == true };
         client.PacketReceived += OnPacket;
         client.Closed += () => Dispatcher.BeginInvoke(() =>
@@ -123,6 +134,7 @@ public partial class MainWindow : Window
             }
         });
         session = client;
+        DecoderModeBox.IsEnabled = false;
         await Task.Run(() => client.ConnectAsync(host, port, CancellationToken.None));
         var hello = client.Hello ?? throw new ProtocolException("HELLO がありません");
         SendAuth(client, hello);
@@ -159,47 +171,10 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(() => OnAuth(result));
                 break;
             case VideoConfigPacket config:
-                try
-                {
-                    decoder?.Open(config.Codec, config.AnnexB, config.Width, config.Height);
-                    Dispatcher.BeginInvoke(() => Status($"映像設定受信: {(config.Codec == ProtocolLimits.CodecHevc ? "HEVC" : "H.264")} {config.Width}×{config.Height}"));
-                }
-                catch (Exception error)
-                {
-                    Dispatcher.BeginInvoke(() => Status($"映像デコーダー初期化失敗: {error.Message}"));
-                }
-
+                QueueVideoPacket(config);
                 break;
             case VideoPacket video:
-                byte[]? bgra = null;
-                var width = 0;
-                var height = 0;
-                try
-                {
-                    bgra = decoder?.Decode(video.AnnexB, video.Keyframe, out width, out height);
-                }
-                catch (Exception error)
-                {
-                    bgra = null;
-                    if (!decoderErrorReported)
-                    {
-                        decoderErrorReported = true;
-                        Dispatcher.BeginInvoke(() => Status($"映像デコード失敗: {error.Message}"));
-                    }
-                }
-
-                if (bgra == null)
-                {
-                    RequestKeyframe();
-                    return;
-                }
-
-                PublishFrame(bgra, width, height);
-                if (!firstVideoFrameReceived)
-                {
-                    firstVideoFrameReceived = true;
-                    Dispatcher.BeginInvoke(() => Status("映像を受信しています"));
-                }
+                QueueVideoPacket(video);
                 break;
             case AudioConfigPacket audioConfig:
                 try
@@ -230,6 +205,120 @@ public partial class MainWindow : Window
                 var rtt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - pong.ClientUnixMs;
                 Dispatcher.BeginInvoke(() => LatencyText.Text = $"遅延 {Math.Max(0, rtt)} ms");
                 break;
+        }
+    }
+
+    private void QueueVideoPacket(Packet packet)
+    {
+        lock (videoQueueGate)
+        {
+            if (videoPackets.IsAddingCompleted)
+            {
+                return;
+            }
+
+            if (packet is VideoConfigPacket)
+            {
+                while (videoPackets.TryTake(out _)) { }
+                latestVideoConfig = (VideoConfigPacket)packet;
+                waitingForVideoKeyframe = true;
+                videoPackets.TryAdd(packet);
+                return;
+            }
+
+            if (packet is not VideoPacket video)
+            {
+                return;
+            }
+
+            if (waitingForVideoKeyframe && !video.Keyframe)
+            {
+                return;
+            }
+
+            if (videoPackets.Count >= videoPackets.BoundedCapacity)
+            {
+                while (videoPackets.TryTake(out _)) { }
+                waitingForVideoKeyframe = true;
+                if (latestVideoConfig != null)
+                {
+                    videoPackets.TryAdd(latestVideoConfig);
+                }
+                RequestKeyframe();
+                if (!video.Keyframe)
+                {
+                    return;
+                }
+            }
+
+            if (videoPackets.TryAdd(video) && video.Keyframe)
+            {
+                waitingForVideoKeyframe = false;
+            }
+        }
+    }
+
+    private void ProcessVideoPackets()
+    {
+        foreach (var packet in videoPackets.GetConsumingEnumerable())
+        {
+            if (packet is VideoConfigPacket config)
+            {
+                try
+                {
+                    lock (decoderGate)
+                    {
+                        decoder?.Open(config.Codec, config.AnnexB, config.Width, config.Height);
+                    }
+                    Dispatcher.BeginInvoke(() => Status($"映像設定受信: {(config.Codec == ProtocolLimits.CodecHevc ? "HEVC" : "H.264")} {config.Width}×{config.Height}"));
+                }
+                catch (Exception error)
+                {
+                    Dispatcher.BeginInvoke(() => Status($"映像デコーダー初期化失敗: {error.Message}"));
+                }
+
+                continue;
+            }
+
+            if (packet is not VideoPacket video)
+            {
+                continue;
+            }
+
+            byte[]? bgra = null;
+            var width = 0;
+            var height = 0;
+            var hardwareAccelerated = false;
+            try
+            {
+                lock (decoderGate)
+                {
+                    bgra = decoder?.Decode(video.AnnexB, video.Keyframe, out width, out height);
+                    hardwareAccelerated = decoder?.HardwareAccelerated == true;
+                }
+            }
+            catch (Exception error)
+            {
+                if (!decoderErrorReported)
+                {
+                    decoderErrorReported = true;
+                    Dispatcher.BeginInvoke(() => Status($"映像デコード失敗: {error.Message}"));
+                }
+            }
+
+            if (bgra == null)
+            {
+                RequestKeyframe();
+                continue;
+            }
+
+            PublishFrame(bgra, width, height);
+            if (!firstVideoFrameReceived)
+            {
+                firstVideoFrameReceived = true;
+                var mode = hardwareAccelerated ? "ハードウェアデコード" : "ソフトウェアデコード";
+                Dispatcher.BeginInvoke(() => Status($"映像を受信しています（{mode}）"));
+            }
         }
     }
 
@@ -615,10 +704,20 @@ public partial class MainWindow : Window
     {
         session?.Dispose();
         session = null;
-        decoder?.Dispose();
-        decoder = null;
+        lock (videoQueueGate)
+        {
+            while (videoPackets.TryTake(out _)) { }
+            waitingForVideoKeyframe = true;
+            latestVideoConfig = null;
+        }
+        lock (decoderGate)
+        {
+            decoder?.Dispose();
+            decoder = null;
+        }
         audio?.Dispose();
         audio = null;
+        DecoderModeBox.IsEnabled = true;
         TrustButton.IsEnabled = false;
     }
 

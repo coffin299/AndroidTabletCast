@@ -512,7 +512,8 @@ fun presetOf(id: Int): StreamPreset {
     return when (id) {
         PRESET_LOW_LATENCY -> StreamPreset(PRESET_LOW_LATENCY, 1280, 30, 4_000_000)
         PRESET_BALANCED -> StreamPreset(PRESET_BALANCED, 1920, 60, 10_000_000)
-        PRESET_MAX_QUALITY -> StreamPreset(PRESET_MAX_QUALITY, 3840, 60, 120_000_000)
+        // Wi-Fi のTCPキューを膨らませないよう、最高画質でも 50 Mbps に上限を置く。
+        PRESET_MAX_QUALITY -> StreamPreset(PRESET_MAX_QUALITY, 3840, 60, 50_000_000)
         else -> StreamPreset(PRESET_HIGH_QUALITY, 3840, 60, 30_000_000)
     }
 }

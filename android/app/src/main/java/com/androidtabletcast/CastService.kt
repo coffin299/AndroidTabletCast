@@ -68,7 +68,7 @@ class CastService : Service(), StreamEvents {
     private var router: InputRouter? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicast: WifiManager.MulticastLock? = null
-    private var desiredPreset = PRESET_MAX_QUALITY
+    private var desiredPreset = PRESET_BALANCED
     private var releasing = false
     private var overlay: TextView? = null
 

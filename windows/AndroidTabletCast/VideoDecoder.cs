@@ -4,11 +4,20 @@ using FFmpeg.AutoGen;
 
 namespace AndroidTabletCast;
 
+public enum VideoDecodeMode
+{
+    Automatic,
+    Software,
+    D3D11Va,
+    Dxva2,
+}
+
 public sealed unsafe class VideoDecoder : IDisposable
 {
     private AVCodecContext* context;
     private AVFrame* frame;
     private AVPacket* packet;
+    private AVFrame* transferFrame;
     private SwsContext* scaler;
     private int scaledWidth;
     private int scaledHeight;
@@ -17,6 +26,18 @@ public sealed unsafe class VideoDecoder : IDisposable
     private byte[] parameterSets = Array.Empty<byte>();
     private int codecId;
     private static int nativeReady;
+    private readonly VideoDecodeMode decodeMode;
+    private readonly AVCodecContext_get_format getFormatCallback;
+    private AVPixelFormat hardwarePixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+    private bool hardwareSelected;
+
+    public VideoDecoder(VideoDecodeMode decodeMode = VideoDecodeMode.Automatic)
+    {
+        this.decodeMode = decodeMode;
+        getFormatCallback = SelectPixelFormat;
+    }
+
+    public bool HardwareAccelerated => hardwareSelected;
 
     public static string? ProbeNative()
     {
@@ -64,12 +85,18 @@ public sealed unsafe class VideoDecoder : IDisposable
 
         context = ffmpeg.avcodec_alloc_context3(decoder);
         context->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
-        context->thread_count = 1;
+        context->thread_count = decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2 ? 1 : 0;
         context->width = width;
         context->height = height;
+        if (!ConfigureHardware(context) && decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2)
+        {
+            Close();
+            throw new InvalidOperationException($"{decodeMode} ハードウェアデコードを初期化できません。自動またはソフトウェアを選んでください。");
+        }
         // annex-B を extradata に入れると FFmpeg が同期できず、画面が真っ黒になる。
         Check(ffmpeg.avcodec_open2(context, decoder, null));
         frame = ffmpeg.av_frame_alloc();
+        transferFrame = ffmpeg.av_frame_alloc();
         packet = ffmpeg.av_packet_alloc();
         open = true;
         parameterSets = annexB;
@@ -100,6 +127,10 @@ public sealed unsafe class VideoDecoder : IDisposable
         var sent = ffmpeg.avcodec_send_packet(context, packet);
         if (sent < 0)
         {
+            if ((decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2) && !hardwareSelected)
+            {
+                throw new InvalidOperationException($"{decodeMode} はこの映像コーデックまたはGPUで利用できません。");
+            }
             ffmpeg.avcodec_flush_buffers(context);
             return null;
         }
@@ -111,6 +142,66 @@ public sealed unsafe class VideoDecoder : IDisposable
         }
 
         return ToBgra(out width, out height);
+    }
+
+    private bool ConfigureHardware(AVCodecContext* codecContext)
+    {
+        if (decodeMode == VideoDecodeMode.Software)
+        {
+            return false;
+        }
+
+        var devices = decodeMode switch
+        {
+            VideoDecodeMode.D3D11Va => new[] { (AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA, AVPixelFormat.AV_PIX_FMT_D3D11) },
+            VideoDecodeMode.Dxva2 => new[] { (AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2, AVPixelFormat.AV_PIX_FMT_DXVA2_VLD) },
+            _ => new[]
+            {
+                (AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA, AVPixelFormat.AV_PIX_FMT_D3D11),
+                (AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2, AVPixelFormat.AV_PIX_FMT_DXVA2_VLD),
+            },
+        };
+
+        foreach (var device in devices)
+        {
+            AVBufferRef* hardwareDevice = null;
+            var result = ffmpeg.av_hwdevice_ctx_create(
+                &hardwareDevice,
+                device.Item1,
+                null,
+                null,
+                0);
+            if (result < 0 || hardwareDevice == null)
+            {
+                continue;
+            }
+
+            codecContext->hw_device_ctx = hardwareDevice;
+            codecContext->get_format = getFormatCallback;
+            hardwarePixelFormat = device.Item2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private AVPixelFormat SelectPixelFormat(AVCodecContext* _, AVPixelFormat* formats)
+    {
+        for (var current = formats; *current != AVPixelFormat.AV_PIX_FMT_NONE; current++)
+        {
+            if (*current == hardwarePixelFormat)
+            {
+                hardwareSelected = true;
+                return *current;
+            }
+        }
+
+        if (decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2)
+        {
+            return AVPixelFormat.AV_PIX_FMT_NONE;
+        }
+
+        return formats[0];
     }
 
     private byte[] WithParameterSets(byte[] annexB)
@@ -162,9 +253,17 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     private byte[] ToBgra(out int width, out int height)
     {
-        width = frame->width;
-        height = frame->height;
-        var format = (AVPixelFormat)frame->format;
+        AVFrame* source = frame;
+        if (hardwareSelected && frame->format == (int)hardwarePixelFormat)
+        {
+            ffmpeg.av_frame_unref(transferFrame);
+            Check(ffmpeg.av_hwframe_transfer_data(transferFrame, frame, 0));
+            source = transferFrame;
+        }
+
+        width = source->width;
+        height = source->height;
+        var format = (AVPixelFormat)source->format;
         if (scaler == null || scaledWidth != width || scaledHeight != height || scaledFormat != format)
         {
             if (scaler != null)
@@ -195,7 +294,7 @@ public sealed unsafe class VideoDecoder : IDisposable
             var destStride = new int_array8();
             destData[0] = destination;
             destStride[0] = width * 4;
-            ffmpeg.sws_scale(scaler, frame->data, frame->linesize, 0, height, destData, destStride);
+            ffmpeg.sws_scale(scaler, source->data, source->linesize, 0, height, destData, destStride);
         }
 
         return bgra;
@@ -213,6 +312,8 @@ public sealed unsafe class VideoDecoder : IDisposable
     {
         open = false;
         parameterSets = Array.Empty<byte>();
+        hardwareSelected = false;
+        hardwarePixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
         if (scaler != null)
         {
             ffmpeg.sws_freeContext(scaler);
@@ -231,6 +332,13 @@ public sealed unsafe class VideoDecoder : IDisposable
             var current = frame;
             ffmpeg.av_frame_free(&current);
             frame = null;
+        }
+
+        if (transferFrame != null)
+        {
+            var current = transferFrame;
+            ffmpeg.av_frame_free(&current);
+            transferFrame = null;
         }
 
         if (context != null)

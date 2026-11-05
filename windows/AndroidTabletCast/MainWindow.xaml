@@ -38,11 +38,18 @@
                     <TextBox x:Name="PortBox" Margin="0,4,0,8" Text="39721" />
                     <TextBlock Text="PIN（信頼モードがオンなら不要）" />
                     <TextBox x:Name="PinBox" Margin="0,4,0,8" />
-                    <ComboBox x:Name="PresetBox" SelectedIndex="3" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
+                    <ComboBox x:Name="PresetBox" SelectedIndex="1" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
                         <ComboBoxItem Content="低遅延" />
                         <ComboBoxItem Content="バランス" />
                         <ComboBoxItem Content="高画質" />
                         <ComboBoxItem Content="最高画質" />
+                    </ComboBox>
+                    <TextBlock Text="Windows デコード" />
+                    <ComboBox x:Name="DecoderModeBox" SelectedIndex="0" Margin="0,4,0,8">
+                        <ComboBoxItem Content="自動（ハードウェア優先）" />
+                        <ComboBoxItem Content="ソフトウェア" />
+                        <ComboBoxItem Content="D3D11VA" />
+                        <ComboBoxItem Content="DXVA2" />
                     </ComboBox>
                     <CheckBox x:Name="HoverBox" Content="ボタンを離した移動も送る（Shizuku 向け）" Margin="0,0,0,8" />
                     <CheckBox x:Name="MuteBox" Content="音声をミュート" Checked="MuteBox_Changed" Unchecked="MuteBox_Changed" Margin="0,0,0,8" />
@@ -52,7 +59,7 @@
                     <Button Content="このタブレットの信頼を消す" Margin="0,0,0,8" Click="ForgetButton_Click" />
                     <Button Content="フルスクリーン" Margin="0,0,0,8" Click="FullscreenButton_Click" />
                     <Button Content="OBS 用ウィンドウ" Margin="0,0,0,8" Click="ObsButton_Click" />
-                    <TextBlock TextWrapping="Wrap" Foreground="#FF8AA0AE" Text="右クリックは戻る、中クリックはホームです。Esc はフルスクリーン中は解除、それ以外は戻るです。OBS 用ウィンドウは映像だけで、操作は送りません。" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#FF8AA0AE" Text="右クリックは戻る、中クリックはホームです。Esc はフルスクリーン中は解除、それ以外は戻るです。OBS は『タブレット映像（OBS）』を Window Capture で選び、Capture Audio (BETA) をオンにすると配信音も拾えます。操作は送りません。" />
                 </StackPanel>
             </ScrollViewer>
         </DockPanel>
