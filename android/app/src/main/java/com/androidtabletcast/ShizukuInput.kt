@@ -14,28 +14,60 @@ object ShizukuInput {
 
     private var args: Shizuku.UserServiceArgs? = null
     private var listening = false
+    @Volatile private var binding = false
+    @Volatile private var appContext: Context? = null
+    @Volatile private var stateListener: (() -> Unit)? = null
+    @Volatile var state: State = State.NOT_RUNNING
+        private set
+
+    enum class State { NOT_RUNNING, NEEDS_PERMISSION, CONNECTING, READY, FAILED }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             injector = IInputInjector.Stub.asInterface(binder)
+            binding = false
+            updateState(if (injector != null) State.READY else State.FAILED)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             injector = null
+            binding = false
+            updateState(State.FAILED)
         }
     }
 
     fun installListeners(context: Context) {
+        appContext = context.applicationContext
         if (listening) {
             return
         }
         listening = true
         try {
-            Shizuku.addBinderReceivedListenerSticky { bind(context.applicationContext) }
-            Shizuku.addBinderDeadListener { injector = null }
+            Shizuku.addBinderReceivedListenerSticky {
+                bind(appContext ?: return@addBinderReceivedListenerSticky)
+            }
+            Shizuku.addBinderDeadListener {
+                injector = null
+                binding = false
+                updateState(State.NOT_RUNNING)
+            }
+            Shizuku.addRequestPermissionResultListener { requestCode, grantResult ->
+                if (requestCode == REQUEST_CODE) {
+                    if (grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        bind(appContext ?: return@addRequestPermissionResultListener)
+                    } else {
+                        updateState(State.NEEDS_PERMISSION)
+                    }
+                }
+            }
         } catch (_: Throwable) {
             listening = false
         }
+    }
+
+    fun setStateListener(listener: (() -> Unit)?) {
+        stateListener = listener
+        listener?.invoke()
     }
 
     fun isReady(): Boolean = injector != null
@@ -51,27 +83,34 @@ object ShizukuInput {
     fun requestPermission() {
         try {
             if (!Shizuku.pingBinder()) {
+                updateState(State.NOT_RUNNING)
                 return
             }
             if (Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                updateState(State.NEEDS_PERMISSION)
                 Shizuku.requestPermission(REQUEST_CODE)
             }
         } catch (_: Throwable) {
-            // Shizuku アプリが無い、またはまだ起動していない。
+            updateState(State.NOT_RUNNING)
         }
     }
 
+    @Synchronized
     fun bind(context: Context) {
         try {
             if (!Shizuku.pingBinder()) {
+                updateState(State.NOT_RUNNING)
                 return
             }
             if (Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                updateState(State.NEEDS_PERMISSION)
                 return
             }
-            if (injector != null) {
+            if (injector != null || binding) {
                 return
             }
+            binding = true
+            updateState(State.CONNECTING)
             val userArgs = Shizuku.UserServiceArgs(
                 ComponentName(context, InputUserService::class.java),
             )
@@ -84,7 +123,14 @@ object ShizukuInput {
             Shizuku.bindUserService(userArgs, connection)
         } catch (_: Throwable) {
             injector = null
+            binding = false
+            updateState(State.FAILED)
         }
+    }
+
+    private fun updateState(next: State) {
+        state = next
+        stateListener?.invoke()
     }
 
     fun touch(action: Int, x: Float, y: Float, downTime: Long): Boolean {

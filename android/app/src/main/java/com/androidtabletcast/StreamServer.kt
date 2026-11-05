@@ -62,6 +62,7 @@ class StreamServer(
 
     private var tabletId: ByteArray = ByteArray(ID_BYTES)
     private var nonce: ByteArray = ByteArray(NONCE_BYTES)
+    @Volatile
     private var pendingPcId: ByteArray? = null
 
     fun start(pin: String, tabletId: ByteArray, width: Int, height: Int) {

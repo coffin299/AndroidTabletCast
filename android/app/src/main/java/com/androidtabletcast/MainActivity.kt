@@ -92,9 +92,15 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
         findViewById<MaterialButton>(R.id.shizukuButton).setOnClickListener {
-            ShizukuInput.requestPermission()
-            ShizukuInput.bind(this)
-            renderPermissions()
+            val shizukuIntent = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+            if (shizukuIntent == null) {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")))
+            } else if (!ShizukuInput.isInstalled()) {
+                startActivity(shizukuIntent)
+            } else {
+                ShizukuInput.requestPermission()
+                ShizukuInput.bind(this)
+            }
         }
 
         stopListening = CastStatus.listen { snapshot ->
@@ -105,6 +111,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ShizukuInput.setStateListener { runOnUiThread { renderPermissions() } }
         ShizukuInput.bind(this)
         renderPermissions()
         renderTrustList()
@@ -112,6 +119,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        ShizukuInput.setStateListener(null)
         stopListening?.invoke()
         super.onDestroy()
     }
@@ -156,9 +164,12 @@ class MainActivity : AppCompatActivity() {
             "ユーザー補助: 無効（タップの返しに必要）"
         }
         val shizuku = when {
-            ShizukuInput.isReady() -> "Shizuku: 入力注入を使用できます"
-            ShizukuInput.isInstalled() -> "Shizuku: 起動済み。許可すると低遅延の操作になります"
-            else -> "Shizuku: 未接続。入れなくても映像と基本操作は動きます"
+            ShizukuInput.state == ShizukuInput.State.READY -> "Shizuku: 入力注入を使用できます"
+            ShizukuInput.state == ShizukuInput.State.CONNECTING -> "Shizuku: 入力サービスに接続中…"
+            ShizukuInput.state == ShizukuInput.State.NEEDS_PERMISSION -> "Shizuku: 許可が必要です。ボタンから許可してください"
+            ShizukuInput.state == ShizukuInput.State.FAILED -> "Shizuku: 接続に失敗しました。Shizuku を再起動して再試行してください"
+            ShizukuInput.isInstalled() -> "Shizuku: 起動済み。ボタンから権限を許可してください"
+            else -> "Shizuku: 未起動または未インストール。ボタンから Shizuku を開けます"
         }
         findViewById<TextView>(R.id.shizukuState).text = shizuku
     }
