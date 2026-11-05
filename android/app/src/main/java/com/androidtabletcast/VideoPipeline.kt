@@ -50,6 +50,19 @@ class VideoPipeline(
         val config = lastConfig
         if (config != null) {
             send(config)
+        } else {
+            val encoder = codec
+            val width = activeWidth
+            val height = activeHeight
+            if (encoder != null && width > 0 && height > 0) {
+                try {
+                    // 画質切替と認証が重なってキャッシュが空でも、稼働中エンコーダーから復元する。
+                    Log.w(TAG, "cached video config missing; rebuilding from encoder output format")
+                    sendCodecConfig(encoder.outputFormat, FrameSize(width, height))
+                } catch (error: Exception) {
+                    Log.e(TAG, "failed to rebuild video config", error)
+                }
+            }
         }
         val current = display ?: return
         val input = surface ?: return

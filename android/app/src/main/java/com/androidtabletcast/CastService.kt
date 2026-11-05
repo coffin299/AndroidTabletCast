@@ -134,6 +134,7 @@ class CastService : Service(), StreamEvents {
     }
 
     override fun onKeyframeRequested() {
+        video?.replayConfig()
         video?.requestKeyframe()
     }
 
