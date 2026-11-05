@@ -5,4 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AndroidTabletCast</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AndroidTabletCast.Protocol.Tests" />
+  </ItemGroup>
 </Project>

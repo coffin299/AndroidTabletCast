@@ -14,7 +14,8 @@ class Preferences(context: Context) {
     var trustMode: Boolean
         get() = prefs.getBoolean(KEY_TRUST, false)
         set(value) {
-            prefs.edit().putBoolean(KEY_TRUST, value).apply()
+            // 接続の HELLO が直後に読むので、apply の遅れでオフのままにしない。
+            prefs.edit().putBoolean(KEY_TRUST, value).commit()
         }
 
     companion object {

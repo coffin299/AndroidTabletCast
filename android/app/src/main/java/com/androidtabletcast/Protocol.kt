@@ -543,10 +543,27 @@ class AuthLockout(
     }
 }
 
+fun hasStartCode(data: ByteArray): Boolean {
+    if (data.size >= 4 && data[0] == 0.toByte() && data[1] == 0.toByte() && data[2] == 0.toByte() && data[3] == 1.toByte()) {
+        return true
+    }
+    return data.size >= 3 && data[0] == 0.toByte() && data[1] == 0.toByte() && data[2] == 1.toByte()
+}
+
+fun ensureAnnexB(data: ByteArray): ByteArray {
+    val converted = toAnnexB(data)
+    if (hasStartCode(converted)) {
+        return converted
+    }
+    // 生の NAL はそのままだとデコーダが同期できず、画面が真っ黒になる。
+    val prefixed = ByteArray(converted.size + 4)
+    prefixed[3] = 1
+    System.arraycopy(converted, 0, prefixed, 4, converted.size)
+    return prefixed
+}
+
 fun toAnnexB(data: ByteArray): ByteArray {
-    if (data.size >= 3 && data[0] == 0.toByte() && data[1] == 0.toByte() &&
-        (data[2] == 1.toByte() || (data.size >= 4 && data[2] == 0.toByte() && data[3] == 1.toByte()))
-    ) {
+    if (hasStartCode(data)) {
         return data
     }
     val out = ByteArrayOutputStream()

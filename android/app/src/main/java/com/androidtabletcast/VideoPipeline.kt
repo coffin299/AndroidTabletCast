@@ -32,6 +32,9 @@ class VideoPipeline(
     @Volatile
     private var lastConfig: Packet.VideoConfig? = null
 
+    private var activeWidth = 0
+    private var activeHeight = 0
+
     fun start(presetId: Int): Boolean {
         synchronized(lock) {
             stopLocked()
@@ -54,8 +57,21 @@ class VideoPipeline(
     }
 
     fun replayConfig() {
-        val config = lastConfig ?: return
-        send(config)
+        val config = lastConfig
+        if (config != null) {
+            send(config)
+        }
+        val current = display ?: return
+        val input = surface ?: return
+        if (activeWidth <= 0 || activeHeight <= 0) {
+            return
+        }
+        try {
+            // 先に作った仮想ディスプレイが黒いまま固まる端末があるので、接続時に面を付け直す。
+            current.setSurface(input)
+            current.resize(activeWidth, activeHeight, densityDpi.coerceAtLeast(1))
+        } catch (_: Exception) {
+        }
     }
 
     fun requestKeyframe() {
@@ -85,6 +101,8 @@ class VideoPipeline(
 
     private fun stopLocked() {
         running = false
+        activeWidth = 0
+        activeHeight = 0
         val worker = thread
         thread = null
         display?.release()
@@ -109,17 +127,21 @@ class VideoPipeline(
         try {
             input = encoder.createInputSurface()
             encoder.start()
-            virtual = projection.createVirtualDisplay(
-                "atcast",
-                fitted.width,
-                fitted.height,
-                densityDpi.coerceAtLeast(1),
-                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                input,
-                null,
-                null,
-            )
+            val dpi = densityDpi.coerceAtLeast(1)
+            val mirror = android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
+            val visible = android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or mirror
+            virtual = try {
+                projection.createVirtualDisplay("atcast", fitted.width, fitted.height, dpi, visible, input, null, null)
+            } catch (_: Exception) {
+                projection.createVirtualDisplay("atcast", fitted.width, fitted.height, dpi, mirror, input, null, null)
+            }
+            try {
+                virtual.setSurface(input)
+            } catch (_: Exception) {
+            }
             codec = encoder
+            activeWidth = fitted.width
+            activeHeight = fitted.height
             surface = input
             display = virtual
             running = true
@@ -134,6 +156,8 @@ class VideoPipeline(
         } catch (error: Exception) {
             Log.e(TAG, "video start failed ${fitted.width}x${fitted.height}", error)
             running = false
+            activeWidth = 0
+            activeHeight = 0
             if (codec === encoder) {
                 codec = null
                 surface = null
@@ -238,7 +262,7 @@ class VideoPipeline(
                             buffer.position(info.offset)
                             buffer.limit(info.offset + info.size)
                             buffer.get(bytes)
-                            val annex = toAnnexB(bytes)
+                            val annex = ensureAnnexB(bytes)
                             val config = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                             val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
                             if (config) {
@@ -267,14 +291,22 @@ class VideoPipeline(
         } catch (_: Exception) {
             null
         }
-        val spsSize = sps.remaining()
-        val ppsSize = pps?.remaining() ?: 0
-        val merged = ByteArray(spsSize + ppsSize)
-        sps.get(merged, 0, spsSize)
-        if (pps != null && ppsSize > 0) {
-            pps.get(merged, spsSize, ppsSize)
+        val spsBytes = ByteArray(sps.remaining())
+        sps.get(spsBytes)
+        val spsNal = ensureAnnexB(spsBytes)
+        val ppsNal = if (pps != null && pps.remaining() > 0) {
+            val raw = ByteArray(pps.remaining())
+            pps.get(raw)
+            ensureAnnexB(raw)
+        } else {
+            ByteArray(0)
         }
-        publishConfig(Packet.VideoConfig(size.width, size.height, toAnnexB(merged)))
+        val merged = ByteArray(spsNal.size + ppsNal.size)
+        System.arraycopy(spsNal, 0, merged, 0, spsNal.size)
+        if (ppsNal.isNotEmpty()) {
+            System.arraycopy(ppsNal, 0, merged, spsNal.size, ppsNal.size)
+        }
+        publishConfig(Packet.VideoConfig(size.width, size.height, merged))
     }
 
     private fun publishConfig(config: Packet.VideoConfig) {
@@ -295,6 +327,10 @@ class VideoPipeline(
         format.setInteger(MediaFormat.KEY_BIT_RATE, preset.bitrate)
         format.setInteger(MediaFormat.KEY_FRAME_RATE, preset.fps)
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+        if (aggressive && Build.VERSION.SDK_INT >= 29) {
+            // IDR に SPS/PPS を付ける。無いと受信側は同期できず真っ黒のままになる。
+            format.setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
+        }
         if (!aggressive) {
             return format
         }

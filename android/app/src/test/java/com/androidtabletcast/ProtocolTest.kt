@@ -117,6 +117,7 @@ class ProtocolTest {
         assertArrayEquals(byteArrayOf(0, 0, 0, 1, 0x65), converted)
         val raw = byteArrayOf(0, 0, 0, 2, 0x65, 0x01)
         assertArrayEquals(byteArrayOf(0, 0, 0, 1, 0x65, 0x01), toAnnexB(raw))
+        assertArrayEquals(byteArrayOf(0, 0, 0, 1, 0x67, 0x42), ensureAnnexB(byteArrayOf(0x67, 0x42)))
     }
 
     private fun fixture(name: String): ByteArray {

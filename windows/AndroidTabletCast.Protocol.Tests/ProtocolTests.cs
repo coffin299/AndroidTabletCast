@@ -96,6 +96,19 @@ public class ProtocolTests
         Assert.Equal(39721, service.Port);
     }
 
+    [Fact]
+    public void BeaconAndMdnsCollapseToOneDevice()
+    {
+        var devices = new Dictionary<string, DiscoveredTablet>();
+        var id = Enumerable.Range(1, 16).Select(value => (byte)value).ToArray();
+        var seen = DateTime.UtcNow;
+        DiscoveryMerge.Remember(devices, "Tab", "192.168.1.20", 39721, id, seen);
+        DiscoveryMerge.Remember(devices, "Tab", "192.168.1.20", 39721, Array.Empty<byte>(), seen);
+        var only = Assert.Single(devices.Values);
+        Assert.Equal("192.168.1.20", only.Host);
+        Assert.Equal(16, only.TabletId.Length);
+    }
+
     private static byte[] BuildMdns()
     {
         var body = new List<byte>();

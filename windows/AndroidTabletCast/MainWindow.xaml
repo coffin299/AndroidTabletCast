@@ -36,7 +36,7 @@
                     <TextBox x:Name="IpBox" Margin="0,4,0,8" />
                     <TextBlock Text="ポート" />
                     <TextBox x:Name="PortBox" Margin="0,4,0,8" Text="39721" />
-                    <TextBlock Text="PIN（信頼接続では空欄）" />
+                    <TextBlock Text="PIN（信頼モードがオンなら不要）" />
                     <TextBox x:Name="PinBox" Margin="0,4,0,8" />
                     <ComboBox x:Name="PresetBox" SelectedIndex="2" SelectionChanged="PresetBox_SelectionChanged" Margin="0,0,0,8">
                         <ComboBoxItem Content="低遅延" />

@@ -14,6 +14,7 @@ public sealed unsafe class VideoDecoder : IDisposable
     private int scaledHeight;
     private AVPixelFormat scaledFormat;
     private bool open;
+    private byte[] parameterSets = Array.Empty<byte>();
     private static int nativeReady;
 
     public static string? ProbeNative()
@@ -61,34 +62,40 @@ public sealed unsafe class VideoDecoder : IDisposable
         context->thread_count = 1;
         context->width = width;
         context->height = height;
-        if (annexB.Length > 0)
-        {
-            context->extradata_size = annexB.Length;
-            context->extradata = (byte*)ffmpeg.av_malloc((ulong)(annexB.Length + ffmpeg.AV_INPUT_BUFFER_PADDING_SIZE));
-            Marshal.Copy(annexB, 0, (IntPtr)context->extradata, annexB.Length);
-        }
-
+        // annex-B を extradata に入れると FFmpeg が同期できず、画面が真っ黒になる。
         Check(ffmpeg.avcodec_open2(context, codec, null));
         frame = ffmpeg.av_frame_alloc();
         packet = ffmpeg.av_packet_alloc();
         open = true;
+        parameterSets = annexB;
+        if (annexB.Length > 0)
+        {
+            Decode(annexB, false, out _, out _);
+        }
     }
 
-    public byte[]? Decode(byte[] annexB, out int width, out int height)
+    public byte[]? Decode(byte[] annexB, bool keyframe, out int width, out int height)
     {
         width = 0;
         height = 0;
-        if (!open)
+        if (!open || annexB.Length == 0)
         {
             return null;
         }
 
+        var payload = keyframe ? WithParameterSets(annexB) : annexB;
         ffmpeg.av_packet_unref(packet);
-        Check(ffmpeg.av_new_packet(packet, annexB.Length));
-        Marshal.Copy(annexB, 0, (IntPtr)packet->data, annexB.Length);
+        Check(ffmpeg.av_new_packet(packet, payload.Length));
+        Marshal.Copy(payload, 0, (IntPtr)packet->data, payload.Length);
+        if (keyframe)
+        {
+            packet->flags |= ffmpeg.AV_PKT_FLAG_KEY;
+        }
+
         var sent = ffmpeg.avcodec_send_packet(context, packet);
         if (sent < 0)
         {
+            ffmpeg.avcodec_flush_buffers(context);
             return null;
         }
 
@@ -99,6 +106,44 @@ public sealed unsafe class VideoDecoder : IDisposable
         }
 
         return ToBgra(out width, out height);
+    }
+
+    private byte[] WithParameterSets(byte[] annexB)
+    {
+        if (parameterSets.Length == 0 || StartsWithParameterSet(annexB))
+        {
+            return annexB;
+        }
+
+        var merged = new byte[parameterSets.Length + annexB.Length];
+        Buffer.BlockCopy(parameterSets, 0, merged, 0, parameterSets.Length);
+        Buffer.BlockCopy(annexB, 0, merged, parameterSets.Length, annexB.Length);
+        return merged;
+    }
+
+    private static bool StartsWithParameterSet(byte[] data)
+    {
+        var index = 0;
+        if (data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+        {
+            index = 4;
+        }
+        else if (data.Length >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1)
+        {
+            index = 3;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (index >= data.Length)
+        {
+            return false;
+        }
+
+        var nal = data[index] & 0x1F;
+        return nal is 7 or 8;
     }
 
     public void Dispose() => Close();
@@ -155,6 +200,7 @@ public sealed unsafe class VideoDecoder : IDisposable
     private void Close()
     {
         open = false;
+        parameterSets = Array.Empty<byte>();
         if (scaler != null)
         {
             ffmpeg.sws_freeContext(scaler);

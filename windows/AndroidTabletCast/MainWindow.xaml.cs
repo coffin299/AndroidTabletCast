@@ -62,8 +62,7 @@ public partial class MainWindow : Window
     {
         if (session != null && session.Hello != null && !session.Authenticated)
         {
-            session.SendPin(PinBox.Text.Trim());
-            Status("PIN を送信しました");
+            SendAuth(session, session.Hello);
             return;
         }
 
@@ -122,14 +121,29 @@ public partial class MainWindow : Window
         session = client;
         await Task.Run(() => client.ConnectAsync(host, port, CancellationToken.None));
         var hello = client.Hello ?? throw new ProtocolException("HELLO がありません");
-        if (hello.TrustMode && PinBox.Text.Trim().Length == 0 && store.TryGetToken(hello.TabletId, out var token))
+        SendAuth(client, hello);
+    }
+
+    private void SendAuth(StreamClient client, HelloPacket hello)
+    {
+        if (hello.TrustMode && store.TryGetToken(hello.TabletId, out var token))
         {
+            // PIN 欄に前回の値が残っていても、登録済みなら信頼を先に使う。
             client.SendTrust(store.PcId, token);
             Status("信頼情報で認証しています");
             return;
         }
 
-        client.SendPin(PinBox.Text.Trim());
+        var pin = PinBox.Text.Trim();
+        if (pin.Length == 0)
+        {
+            Status(hello.TrustMode
+                ? "この PC はまだ信頼されていません。表示中の PIN を入力してください"
+                : "タブレットの信頼モードがオフです。表示中の PIN を入力してください");
+            return;
+        }
+
+        client.SendPin(pin);
         Status("PIN を送信しました");
     }
 
@@ -157,7 +171,7 @@ public partial class MainWindow : Window
                 var height = 0;
                 try
                 {
-                    bgra = decoder?.Decode(video.AnnexB, out width, out height);
+                    bgra = decoder?.Decode(video.AnnexB, video.Keyframe, out width, out height);
                 }
                 catch (Exception)
                 {
@@ -206,6 +220,11 @@ public partial class MainWindow : Window
 
     private void OnAuth(AuthResultPacket result)
     {
+        if (result.Code != ProtocolLimits.AuthOk && session?.Authenticated == true)
+        {
+            return;
+        }
+
         if (result.Code == ProtocolLimits.AuthOk)
         {
             Status("接続中");

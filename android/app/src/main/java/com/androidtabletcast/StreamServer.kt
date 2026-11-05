@@ -164,11 +164,16 @@ class StreamServer(
             while (running) {
                 when (val packet = reader.read()) {
                     is Packet.AuthPin -> {
-                        if (!onPin(socket, address, packet.pin)) {
+                        // 信頼で通ったあとに残った PIN を送られても、失敗として上書きしない。
+                        if (!authed && !onPin(socket, address, packet.pin)) {
                             break
                         }
                     }
-                    is Packet.AuthTrust -> onTrust(address, packet)
+                    is Packet.AuthTrust -> {
+                        if (!authed) {
+                            onTrust(address, packet)
+                        }
+                    }
                     is Packet.TrustRequest -> {
                         if (authed) {
                             pendingPcId = packet.pcId
@@ -218,6 +223,7 @@ class StreamServer(
     }
 
     private fun writeHello(socket: Socket) {
+        trustMode = Preferences(appContext).trustMode
         val hello = Packet.Hello(
             version = PROTOCOL_VERSION,
             tabletId = tabletId,

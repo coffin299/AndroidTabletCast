@@ -152,12 +152,47 @@ public sealed class Discovery : IDisposable
 
     private void Remember(string name, string host, int port, byte[] tabletId)
     {
-        var key = tabletId.Length == ProtocolLimits.IdBytes ? Hex.ToHex(tabletId) : $"{host}:{port}";
         lock (gate)
         {
-            devices[key] = new DiscoveredTablet(name, host, port, tabletId, DateTime.UtcNow);
+            DiscoveryMerge.Remember(devices, name, host, port, tabletId, DateTime.UtcNow);
         }
 
         Changed?.Invoke();
+    }
+}
+
+internal static class DiscoveryMerge
+{
+    public static void Remember(
+        Dictionary<string, DiscoveredTablet> devices,
+        string name,
+        string host,
+        int port,
+        byte[] tabletId,
+        DateTime seenAt)
+    {
+        var key = $"{host}:{port}";
+        if (tabletId.Length == ProtocolLimits.IdBytes)
+        {
+            var id = Hex.ToHex(tabletId);
+            var stale = devices
+                .Where(pair => pair.Key != key && pair.Value.TabletId.Length == ProtocolLimits.IdBytes && Hex.ToHex(pair.Value.TabletId) == id)
+                .Select(pair => pair.Key)
+                .ToArray();
+            foreach (var old in stale)
+            {
+                devices.Remove(old);
+            }
+        }
+
+        if (devices.TryGetValue(key, out var existing))
+        {
+            var id = tabletId.Length == ProtocolLimits.IdBytes ? tabletId : existing.TabletId;
+            var shown = name.Length > 0 ? name : existing.Name;
+            devices[key] = new DiscoveredTablet(shown, host, port, id, seenAt);
+            return;
+        }
+
+        devices[key] = new DiscoveredTablet(name, host, port, tabletId, seenAt);
     }
 }
