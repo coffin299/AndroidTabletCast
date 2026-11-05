@@ -22,6 +22,8 @@ public partial class MainWindow : Window
     private bool renderQueued;
     private bool dragging;
     private bool pinFallbackSent;
+    private bool decoderErrorReported;
+    private bool firstVideoFrameReceived;
     private bool fullscreen;
     private bool refreshing;
     private long lastKeyframeRequest;
@@ -106,6 +108,8 @@ public partial class MainWindow : Window
     {
         CloseSession();
         pinFallbackSent = false;
+        decoderErrorReported = false;
+        firstVideoFrameReceived = false;
         var client = new StreamClient();
         decoder = new VideoDecoder();
         audio = new AudioOutput { Muted = MuteBox.IsChecked == true };
@@ -158,10 +162,11 @@ public partial class MainWindow : Window
                 try
                 {
                     decoder?.Open(config.Codec, config.AnnexB, config.Width, config.Height);
+                    Dispatcher.BeginInvoke(() => Status($"映像設定受信: {(config.Codec == ProtocolLimits.CodecHevc ? "HEVC" : "H.264")} {config.Width}×{config.Height}"));
                 }
                 catch (Exception error)
                 {
-                    Dispatcher.BeginInvoke(() => Status(error.Message));
+                    Dispatcher.BeginInvoke(() => Status($"映像デコーダー初期化失敗: {error.Message}"));
                 }
 
                 break;
@@ -173,9 +178,14 @@ public partial class MainWindow : Window
                 {
                     bgra = decoder?.Decode(video.AnnexB, video.Keyframe, out width, out height);
                 }
-                catch (Exception)
+                catch (Exception error)
                 {
                     bgra = null;
+                    if (!decoderErrorReported)
+                    {
+                        decoderErrorReported = true;
+                        Dispatcher.BeginInvoke(() => Status($"映像デコード失敗: {error.Message}"));
+                    }
                 }
 
                 if (bgra == null)
@@ -185,6 +195,11 @@ public partial class MainWindow : Window
                 }
 
                 PublishFrame(bgra, width, height);
+                if (!firstVideoFrameReceived)
+                {
+                    firstVideoFrameReceived = true;
+                    Dispatcher.BeginInvoke(() => Status("映像を受信しています"));
+                }
                 break;
             case AudioConfigPacket audioConfig:
                 try

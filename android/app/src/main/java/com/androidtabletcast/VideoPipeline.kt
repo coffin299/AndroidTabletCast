@@ -310,7 +310,8 @@ class VideoPipeline(
         while (running) {
             val index = try {
                 encoder.dequeueOutputBuffer(info, 10_000)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.e(TAG, "video output failed", error)
                 break
             }
             try {
