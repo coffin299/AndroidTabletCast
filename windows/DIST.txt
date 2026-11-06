@@ -1,9 +1,21 @@
 Android Tablet Cast（Windows）
 
-1. このフォルダの AndroidTabletCast.exe を起動する。
+1. 配布フォルダ直下の AndroidTabletCast.exe を起動する。
 2. 初回はプライベートネットワークへの通信を許可する。
 3. タブレットと同じ Wi-Fi で、表示された端末を選ぶ。
 4. 見つからない場合は、タブレットに出ている IP とポート 39721 を直接入力する。
 5. PIN を入力して接続する。信頼登録後は、タブレット側の「信頼するデバイスは PIN 不要」がオンなら PIN を空のまま接続できる。
 
-同梱の avcodec などの DLL は FFmpeg（LGPL 2.1）です。詳細は FFMPEG-LGPL.txt を見てください。
+配布フォルダは次の構成です。
+
+- AndroidTabletCast.exe: 起動ファイル（.NET ランタイムとアプリの管理DLLを同梱）
+- ffmpeg\: 映像・音声デコード用 DLL
+- docs\: 起動手順とライセンス
+
+FFmpeg DLL は FFmpeg（LGPL 2.1）です。詳細は docs\FFMPEG-LGPL.txt を見てください。
+
+配布フォルダを作り直すには、windows\AndroidTabletCast で次を実行します。
+
+    dotnet publish .\AndroidTabletCast.csproj -c Release -p:PublishProfile=win-x64
+
+出力先は windows\publish です。

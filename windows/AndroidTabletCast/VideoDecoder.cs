@@ -41,7 +41,7 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     public static string? ProbeNative()
     {
-        var dll = Path.Combine(AppContext.BaseDirectory, "avcodec-61.dll");
+        var dll = Path.Combine(FfmpegDirectory, "avcodec-61.dll");
         if (!File.Exists(dll))
         {
             return "FFmpeg の DLL がありません。windows/tools/fetch-ffmpeg.ps1 を実行してください。";
@@ -59,7 +59,7 @@ public sealed unsafe class VideoDecoder : IDisposable
 
         try
         {
-            ffmpeg.RootPath = AppContext.BaseDirectory;
+            ffmpeg.RootPath = FfmpegDirectory;
             ffmpeg.av_log_set_level(ffmpeg.AV_LOG_ERROR);
         }
         catch
@@ -68,6 +68,8 @@ public sealed unsafe class VideoDecoder : IDisposable
             throw;
         }
     }
+
+    private static string FfmpegDirectory => Path.Combine(AppContext.BaseDirectory, "ffmpeg");
 
     public void Open(int codec, byte[] annexB, int width, int height)
     {

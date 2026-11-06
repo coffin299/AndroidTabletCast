@@ -88,9 +88,9 @@ jobs:
       - name: Fetch FFmpeg
         run: powershell -ExecutionPolicy Bypass -File windows/tools/fetch-ffmpeg.ps1
       - name: Publish
-        run: dotnet publish windows/AndroidTabletCast/AndroidTabletCast.csproj -c Release -r win-x64 --self-contained true -o publish/win
+        run: dotnet publish windows/AndroidTabletCast/AndroidTabletCast.csproj -c Release -p:PublishProfile=win-x64
       - name: Zip
-        run: Compress-Archive -Path publish/win/* -DestinationPath AndroidTabletCast-win-x64.zip
+        run: Compress-Archive -Path windows/publish/* -DestinationPath AndroidTabletCast-win-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows-zip

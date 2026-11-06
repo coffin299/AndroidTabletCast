@@ -18,14 +18,19 @@
     <ProjectReference Include="..\AndroidTabletCast.Core\AndroidTabletCast.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\DIST.txt" Link="起動手順.txt" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\FFMPEG-LGPL.txt" Link="FFMPEG-LGPL.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\DIST.txt" Link="docs\起動手順.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\FFMPEG-LGPL.txt" Link="docs\FFMPEG-LGPL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="CopyFfmpeg" AfterTargets="Build;Publish">
     <ItemGroup>
       <FfmpegDll Include="$(MSBuildThisFileDirectory)..\ffmpeg\bin\*.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(OutputPath)' != ''" />
-    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(PublishDir)' != ''" />
+    <MakeDir Directories="$(OutputPath)ffmpeg" Condition="'@(FfmpegDll)' != '' and '$(OutputPath)' != ''" />
+    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(OutputPath)ffmpeg" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(OutputPath)' != ''" />
+    <MakeDir Directories="$(PublishDir)ffmpeg" Condition="'@(FfmpegDll)' != '' and '$(PublishDir)' != ''" />
+    <Copy SourceFiles="@(FfmpegDll)" DestinationFolder="$(PublishDir)ffmpeg" SkipUnchangedFiles="true" Condition="'@(FfmpegDll)' != '' and '$(PublishDir)' != ''" />
+  </Target>
+  <Target Name="CleanPublishSymbols" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)AndroidTabletCast.Core.pdb" />
   </Target>
 </Project>
