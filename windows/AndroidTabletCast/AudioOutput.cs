@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using NAudio.CoreAudioApi;
 using FFmpeg.AutoGen;
 using NAudio.Wave;
 
@@ -10,7 +11,7 @@ public sealed unsafe class AudioOutput : IDisposable
     private AVFrame* frame;
     private AVPacket* packet;
     private BufferedWaveProvider? buffer;
-    private WaveOutEvent? output;
+    private IWavePlayer? output;
     private bool open;
 
     public bool Muted { get; set; }
@@ -41,12 +42,32 @@ public sealed unsafe class AudioOutput : IDisposable
         buffer = new BufferedWaveProvider(new WaveFormat(sampleRate, 16, channels))
         {
             DiscardOnBufferOverflow = true,
-            BufferDuration = TimeSpan.FromMilliseconds(250),
+            BufferDuration = TimeSpan.FromMilliseconds(120),
         };
-        output = new WaveOutEvent { DesiredLatency = 100 };
-        output.Init(buffer);
+        output = CreateOutput(buffer);
         output.Play();
         open = true;
+    }
+
+    private static IWavePlayer CreateOutput(IWaveProvider provider)
+    {
+        foreach (var latencyMs in new[] { 20, 40 })
+        {
+            var wasapi = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: latencyMs);
+            try
+            {
+                wasapi.Init(provider);
+                return wasapi;
+            }
+            catch
+            {
+                wasapi.Dispose();
+            }
+        }
+
+        var fallback = new WaveOutEvent { DesiredLatency = 60 };
+        fallback.Init(provider);
+        return fallback;
     }
 
     public void Write(byte[] aac)
