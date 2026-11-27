@@ -78,10 +78,10 @@ public sealed class StreamClient : IDisposable
 
     public void SendPin(string pin) => Send(new AuthPinPacket(pin));
 
-    public void SendTrust(byte[] pcId, byte[] token)
+    public void SendTrust(byte[] pcId, byte[] token, byte[]? mac = null)
     {
         var hello = Hello ?? throw new ProtocolException("まだ接続していません");
-        Send(new AuthTrustPacket(pcId, TrustCrypto.TrustHmac(token, hello.Nonce)));
+        Send(new AuthTrustPacket(pcId, TrustCrypto.TrustHmac(token, hello.Nonce), mac));
     }
 
     public void MarkAuthenticated() => Authenticated = true;

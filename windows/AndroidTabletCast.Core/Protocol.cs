@@ -84,7 +84,7 @@ public sealed record AuthPinPacket(string Pin) : Packet
     public override int Type => ProtocolLimits.Auth;
 }
 
-public sealed record AuthTrustPacket(byte[] PcId, byte[] Hmac) : Packet
+public sealed record AuthTrustPacket(byte[] PcId, byte[] Hmac, byte[]? Mac = null) : Packet
 {
     public override int Type => ProtocolLimits.Auth;
 }
@@ -99,7 +99,7 @@ public sealed record TrustGrantPacket(byte[] TabletId, byte[] Token) : Packet
     public override int Type => ProtocolLimits.TrustGrant;
 }
 
-public sealed record TrustRequestPacket(byte[] PcId, string Name) : Packet
+public sealed record TrustRequestPacket(byte[] PcId, string Name, byte[]? Mac = null) : Packet
 {
     public override int Type => ProtocolLimits.TrustRequest;
 }
@@ -208,7 +208,7 @@ public static class Protocol
             ProtocolLimits.Auth => ReadAuth(reader),
             ProtocolLimits.AuthResult => new AuthResultPacket(reader.U8()),
             ProtocolLimits.TrustGrant => new TrustGrantPacket(reader.Bytes(ProtocolLimits.IdBytes), reader.Bytes(ProtocolLimits.TokenBytes)),
-            ProtocolLimits.TrustRequest => new TrustRequestPacket(reader.Bytes(ProtocolLimits.IdBytes), ReadName(reader)),
+            ProtocolLimits.TrustRequest => ReadTrustRequest(reader),
             ProtocolLimits.VideoConfig => new VideoConfigPacket(reader.U8(), reader.U16(), reader.U16(), reader.Rest()),
             ProtocolLimits.Video => new VideoPacket(reader.U64(), reader.U8() != 0, reader.Rest()),
             ProtocolLimits.AudioConfig => new AudioConfigPacket((int)reader.U32(), reader.U8(), reader.Rest()),
@@ -255,9 +255,22 @@ public static class Protocol
         return reader.U8() switch
         {
             ProtocolLimits.AuthMethodPin => new AuthPinPacket(ReadName(reader)),
-            ProtocolLimits.AuthMethodTrust => new AuthTrustPacket(reader.Bytes(ProtocolLimits.IdBytes), reader.Bytes(ProtocolLimits.HmacBytes)),
+            ProtocolLimits.AuthMethodTrust => new AuthTrustPacket(
+                reader.Bytes(ProtocolLimits.IdBytes),
+                reader.Bytes(ProtocolLimits.HmacBytes),
+                ReadOptionalMac(reader)),
             var method => throw new ProtocolException($"未知の認証方式です: {method}"),
         };
+    }
+
+    private static TrustRequestPacket ReadTrustRequest(ByteCursor reader)
+    {
+        return new TrustRequestPacket(reader.Bytes(ProtocolLimits.IdBytes), ReadName(reader), ReadOptionalMac(reader));
+    }
+
+    private static byte[] ReadOptionalMac(ByteCursor reader)
+    {
+        return reader.Remaining >= 6 ? reader.Bytes(6) : Array.Empty<byte>();
     }
 
     private static string ReadName(ByteCursor reader)
@@ -299,6 +312,7 @@ public static class Protocol
                 writer.Bytes(trust.PcId);
                 Require(trust.Hmac, ProtocolLimits.HmacBytes, "hmac");
                 writer.Bytes(trust.Hmac);
+                WriteOptionalMac(writer, trust.Mac);
                 break;
             case AuthResultPacket result:
                 writer.U8(result.Code);
@@ -313,6 +327,7 @@ public static class Protocol
                 Require(request.PcId, ProtocolLimits.IdBytes, "pcId");
                 writer.Bytes(request.PcId);
                 WriteName(writer, request.Name);
+                WriteOptionalMac(writer, request.Mac);
                 break;
             case VideoConfigPacket videoConfig:
                 writer.U8(videoConfig.Codec);
@@ -366,6 +381,41 @@ public static class Protocol
         }
 
         return writer.ToArray();
+    }
+
+    private static void WriteOptionalMac(ByteWriter writer, byte[]? mac)
+    {
+        if (!IsUsableMac(mac))
+        {
+            return;
+        }
+
+        writer.Bytes(mac!);
+    }
+
+    private static bool IsUsableMac(byte[]? mac)
+    {
+        if (mac is not { Length: 6 })
+        {
+            return false;
+        }
+
+        var allZero = true;
+        for (var index = 0; index < mac.Length; index++)
+        {
+            if (mac[index] != 0)
+            {
+                allZero = false;
+                break;
+            }
+        }
+
+        if (allZero)
+        {
+            return false;
+        }
+
+        return !(mac[0] == 0x02 && mac[1] == 0 && mac[2] == 0 && mac[3] == 0 && mac[4] == 0 && mac[5] == 0);
     }
 
     private static void WriteName(ByteWriter writer, string value)

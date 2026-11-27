@@ -122,6 +122,20 @@ class ProtocolTest {
         assertArrayEquals(byteArrayOf(0, 0, 0, 1, 0x67, 0x42), ensureAnnexB(byteArrayOf(0x67, 0x42)))
     }
 
+    @Test
+    fun optionalMacRoundTripsAndCanBeOmitted() {
+        val mac = byteArrayOf(0x02, 0x11, 0x22, 0x33, 0x44, 0x55)
+        val trust = Packet.AuthTrust(ByteArray(ID_BYTES) { 1 }, ByteArray(HMAC_BYTES) { 2 }, mac)
+        val decodedTrust = Protocol.decode(Protocol.encode(trust)) as Packet.AuthTrust
+        assertArrayEquals(mac, decodedTrust.mac)
+        val bare = Protocol.decode(Protocol.encode(Packet.AuthTrust(ByteArray(ID_BYTES) { 1 }, ByteArray(HMAC_BYTES) { 2 }))) as Packet.AuthTrust
+        assertEquals(0, bare.mac.size)
+        val request = Packet.TrustRequest(ByteArray(ID_BYTES) { 3 }, "Desk", mac)
+        val decodedRequest = Protocol.decode(Protocol.encode(request)) as Packet.TrustRequest
+        assertArrayEquals(mac, decodedRequest.mac)
+        assertEquals(null, normalizeMac(byteArrayOf(0x02, 0, 0, 0, 0, 0)))
+    }
+
     private fun fixture(name: String): ByteArray {
         val start = System.getProperty("user.dir") ?: "."
         var dir: File? = File(start)

@@ -88,6 +88,19 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void OptionalMacRoundTripsAndCanBeOmitted()
+    {
+        var mac = new byte[] { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+        var trust = new AuthTrustPacket(Enumerable.Repeat((byte)1, 16).ToArray(), Enumerable.Repeat((byte)2, 32).ToArray(), mac);
+        var decodedTrust = Assert.IsType<AuthTrustPacket>(Protocol.Decode(Protocol.Encode(trust)));
+        Assert.Equal(mac, decodedTrust.Mac);
+        var bare = Assert.IsType<AuthTrustPacket>(Protocol.Decode(Protocol.Encode(new AuthTrustPacket(Enumerable.Repeat((byte)1, 16).ToArray(), Enumerable.Repeat((byte)2, 32).ToArray()))));
+        Assert.Empty(bare.Mac!);
+        var request = Assert.IsType<TrustRequestPacket>(Protocol.Decode(Protocol.Encode(new TrustRequestPacket(Enumerable.Repeat((byte)3, 16).ToArray(), "Desk", mac))));
+        Assert.Equal(mac, request.Mac);
+    }
+
+    [Fact]
     public void MdnsReadsSrvAndAddress()
     {
         var message = BuildMdns();

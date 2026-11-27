@@ -5,10 +5,10 @@
     <string name="start_cast">配信を開始</string>
     <string name="stop_cast">配信を停止</string>
     <string name="trust_mode">信頼するデバイスは PIN 不要</string>
-    <string name="trust_help">初回は PIN が必要です。接続中に Windows から信頼を依頼し、この画面で許可した PC だけが次回から PIN なしでつながります。</string>
+    <string name="trust_help">初回は PIN が必要です。接続中に Windows から信頼を依頼し、画面の上に出る確認で許可した PC だけが次回から PIN なしでつながります。許可した PC の MAC アドレスも覚えるので、トークンが合わなくても同じ PC なら通ります。確認が出ないときは「他のアプリの上に表示」を許可するか、通知を開いてください。</string>
     <string name="video_encoder_label">映像コーデック</string>
     <string name="video_encoder_help">H.265 が使えない端末では、H.265 を選んでも H.264 に切り替わります。設定は次の配信から有効です。</string>
-    <string name="latency_help">映像はハードウェア符号化で遅延を抑えます。コーデックは自動・H.264・H.265から選べます。最高画質は 120Mbps で、パネルの解像度をそのまま使います。他のアプリの上に表示を許可すると、前面のアプリへ切り替えても収録が止まりにくくなります。ユーザー補助での操作はシステム側の都合で映像より遅れます。Shizuku を許可すると、より直接的な入力注入に切り替わります。</string>
+    <string name="latency_help">映像はハードウェア符号化で遅延を抑えます。コーデックは自動・H.264・H.265から選べます。最高画質は 50Mbps で、パネルの解像度をそのまま使います。高画質 1080p は長辺 1920、24Mbps で、PC のメモリ帯域が少ないときに向きます。他のアプリの上に表示を許可すると、前面のアプリへ切り替えても収録が止まりにくくなります。ユーザー補助での操作はシステム側の都合で映像より遅れます。Shizuku を許可すると、より直接的な入力注入に切り替わります。</string>
     <string-array name="video_encoder_options">
         <item>自動（H.265優先）</item>
         <item>H.264</item>

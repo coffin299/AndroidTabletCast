@@ -65,6 +65,12 @@ class StreamServer(
     @Volatile
     private var pendingPcId: ByteArray? = null
 
+    @Volatile
+    private var peerMac: ByteArray? = null
+
+    @Volatile
+    private var claimedMac: ByteArray? = null
+
     fun start(pin: String, tabletId: ByteArray, width: Int, height: Int) {
         stop()
         this.pin = pin
@@ -129,10 +135,21 @@ class StreamServer(
         if (!pending.contentEquals(pcId)) {
             return false
         }
-        val token = trustStore.grant(pcId, name)
+        val token = trustStore.grant(pcId, name, seenMacs())
         send(Packet.TrustGrant(tabletId, token))
         pendingPcId = null
         return true
+    }
+
+    fun seenMacs(): List<ByteArray> {
+        val found = ArrayList<ByteArray>(2)
+        normalizeMac(peerMac)?.let { found.add(it) }
+        normalizeMac(claimedMac)?.let { candidate ->
+            if (found.none { it.contentEquals(candidate) }) {
+                found.add(candidate)
+            }
+        }
+        return found
     }
 
     private fun acceptLoop(socket: ServerSocket) {
@@ -159,7 +176,13 @@ class StreamServer(
             nonce = ByteArray(NONCE_BYTES)
             random.nextBytes(nonce)
             authed = false
+            peerMac = waitForArpMac(socket.inetAddress)
+            claimedMac = null
             writeHello(socket)
+            // 許可済みの MAC なら、トークンが消えていても PIN を待たずに通す。
+            if (trustMode && trustStore.matchesMac(seenMacs())) {
+                becomeAuthenticated()
+            }
             val reader = PacketReader(socket.getInputStream())
             var attempts = 0
             while (running) {
@@ -177,6 +200,7 @@ class StreamServer(
                     }
                     is Packet.TrustRequest -> {
                         if (authed) {
+                            claimedMac = normalizeMac(packet.mac)
                             pendingPcId = packet.pcId
                             events.onTrustRequested(packet.pcId, packet.name)
                         }
@@ -211,6 +235,8 @@ class StreamServer(
         } finally {
             authed = false
             pendingPcId = null
+            peerMac = null
+            claimedMac = null
             try {
                 socket.close()
             } catch (_: Exception) {
@@ -265,12 +291,20 @@ class StreamServer(
             send(Packet.AuthResult(AUTH_TRUST_MODE_OFF))
             return
         }
-        if (!trustStore.verify(packet.pcId, nonce, packet.hmac)) {
-            send(Packet.AuthResult(AUTH_UNTRUSTED))
+        claimedMac = normalizeMac(packet.mac)
+        if (trustStore.verify(packet.pcId, nonce, packet.hmac)) {
+            // トークンが通った接続で MAC を足す。次回トークンがずれても同じ PC と分かる。
+            trustStore.rememberMacs(packet.pcId, seenMacs())
+            lockout.clear(address)
+            becomeAuthenticated()
             return
         }
-        lockout.clear(address)
-        becomeAuthenticated()
+        if (trustStore.matchesMac(seenMacs())) {
+            lockout.clear(address)
+            becomeAuthenticated()
+            return
+        }
+        send(Packet.AuthResult(AUTH_UNTRUSTED))
     }
 
     private fun becomeAuthenticated() {

@@ -11,7 +11,8 @@ class TrustPromptActivity : AppCompatActivity() {
         setContentView(R.layout.activity_trust_prompt)
         val pcId = intent.getStringExtra(EXTRA_PC_ID).orEmpty()
         val name = intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { "Windows" }
-        findViewById<TextView>(R.id.pcName).text = name
+        val mac = intent.getStringExtra(EXTRA_MAC).orEmpty()
+        findViewById<TextView>(R.id.pcName).text = if (mac.isBlank()) name else "$name\n$mac"
         val message = findViewById<TextView>(R.id.promptMessage)
         findViewById<MaterialButton>(R.id.denyButton).setOnClickListener { finish() }
         findViewById<MaterialButton>(R.id.allowButton).setOnClickListener {
@@ -27,5 +28,6 @@ class TrustPromptActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_PC_ID = "pcId"
         const val EXTRA_NAME = "name"
+        const val EXTRA_MAC = "mac"
     }
 }

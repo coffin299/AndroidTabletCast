@@ -23,6 +23,8 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -71,6 +73,7 @@ class CastService : Service(), StreamEvents {
     private var desiredPreset = PRESET_BALANCED
     private var releasing = false
     private var overlay: TextView? = null
+    private var trustPrompt: LinearLayout? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -158,11 +161,9 @@ class CastService : Service(), StreamEvents {
     }
 
     override fun onTrustRequested(pcId: ByteArray, name: String) {
-        val prompt = Intent(this, TrustPromptActivity::class.java)
-        prompt.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        prompt.putExtra(TrustPromptActivity.EXTRA_PC_ID, pcId.toHex())
-        prompt.putExtra(TrustPromptActivity.EXTRA_NAME, name)
-        startActivity(prompt)
+        val pcIdHex = pcId.toHex()
+        val macLabel = server?.seenMacs().orEmpty().joinToString("\n") { formatMac(it) }.ifBlank { "MAC 不明" }
+        main.post { presentTrustPrompt(pcIdHex, name, macLabel) }
     }
 
     override fun onStatus(text: String) {
@@ -287,6 +288,7 @@ class CastService : Service(), StreamEvents {
         try {
             stopPipelines()
             hideOverlay()
+            hideTrustPrompt()
             server?.stop()
             server = null
             val current = projection
@@ -352,6 +354,113 @@ class CastService : Service(), StreamEvents {
         }
     }
 
+    private fun presentTrustPrompt(pcIdHex: String, name: String, macLabel: String) {
+        if (Settings.canDrawOverlays(this)) {
+            showTrustOverlay(pcIdHex, name, macLabel)
+            return
+        }
+        // オーバーレイが無いと、配信中の画面の上に確認 Activity が出ない端末がある。
+        showTrustNotification(pcIdHex, name, macLabel)
+        val prompt = Intent(this, TrustPromptActivity::class.java)
+        prompt.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        prompt.putExtra(TrustPromptActivity.EXTRA_PC_ID, pcIdHex)
+        prompt.putExtra(TrustPromptActivity.EXTRA_NAME, name)
+        prompt.putExtra(TrustPromptActivity.EXTRA_MAC, macLabel)
+        try {
+            startActivity(prompt)
+        } catch (error: Exception) {
+            Log.e(TAG, "trust prompt failed", error)
+        }
+    }
+
+    private fun showTrustOverlay(pcIdHex: String, name: String, macLabel: String) {
+        hideTrustPrompt()
+        val density = resources.displayMetrics.density
+        val pad = (20 * density).toInt()
+        val panel = LinearLayout(this)
+        panel.orientation = LinearLayout.VERTICAL
+        panel.setPadding(pad, pad, pad, pad)
+        panel.setBackgroundColor(0xF0101418.toInt())
+        val title = TextView(this)
+        title.text = "この PC を信頼しますか？"
+        title.setTextColor(0xFFE8EEF2.toInt())
+        title.textSize = 18f
+        val body = TextView(this)
+        body.text = "$name\n$macLabel\n\n許可すると、信頼モードがオンのあいだ、この MAC の PC は PIN なしでつながります。"
+        body.setTextColor(0xFFB7C3CC.toInt())
+        body.textSize = 15f
+        body.setPadding(0, pad / 2, 0, pad)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        val deny = Button(this)
+        deny.text = "拒否"
+        deny.setOnClickListener { hideTrustPrompt() }
+        val allow = Button(this)
+        allow.text = "許可"
+        allow.setOnClickListener {
+            val granted = approveTrust(pcIdHex, name)
+            hideTrustPrompt()
+            if (!granted) {
+                CastStatus.update { it.copy(status = "接続が切れたため信頼を登録できませんでした") }
+            }
+        }
+        row.addView(deny)
+        row.addView(allow)
+        panel.addView(title)
+        panel.addView(body)
+        panel.addView(row)
+        val params = WindowManager.LayoutParams(
+            (360 * density).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        )
+        params.gravity = Gravity.CENTER
+        try {
+            getSystemService(WindowManager::class.java).addView(panel, params)
+            trustPrompt = panel
+        } catch (error: Exception) {
+            Log.e(TAG, "trust overlay failed", error)
+            showTrustNotification(pcIdHex, name, macLabel)
+        }
+    }
+
+    private fun hideTrustPrompt() {
+        val panel = trustPrompt
+        trustPrompt = null
+        if (panel != null) {
+            try {
+                getSystemService(WindowManager::class.java).removeView(panel)
+            } catch (_: Exception) {
+            }
+        }
+        getSystemService(NotificationManager::class.java).cancel(TRUST_NOTIFICATION_ID)
+    }
+
+    private fun showTrustNotification(pcIdHex: String, name: String, macLabel: String) {
+        val prompt = Intent(this, TrustPromptActivity::class.java)
+        prompt.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        prompt.putExtra(TrustPromptActivity.EXTRA_PC_ID, pcIdHex)
+        prompt.putExtra(TrustPromptActivity.EXTRA_NAME, name)
+        prompt.putExtra(TrustPromptActivity.EXTRA_MAC, macLabel)
+        val open = PendingIntent.getActivity(
+            this,
+            2,
+            prompt,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notice = NotificationCompat.Builder(this, TRUST_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_cast)
+            .setContentTitle("この PC を信頼しますか？")
+            .setContentText("$name  $macLabel")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(TRUST_NOTIFICATION_ID, notice)
+    }
+
     private fun hideOverlay() {
         val chip = overlay ?: return
         overlay = null
@@ -398,6 +507,8 @@ class CastService : Service(), StreamEvents {
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(CHANNEL_ID, "画面配信", NotificationManager.IMPORTANCE_LOW)
         manager.createNotificationChannel(channel)
+        val trust = NotificationChannel(TRUST_CHANNEL_ID, "信頼の確認", NotificationManager.IMPORTANCE_HIGH)
+        manager.createNotificationChannel(trust)
     }
 
     companion object {
@@ -407,7 +518,9 @@ class CastService : Service(), StreamEvents {
         const val EXTRA_DATA = "data"
         private const val TAG = "atcast"
         private const val CHANNEL_ID = "cast"
+        private const val TRUST_CHANNEL_ID = "trust"
         private const val NOTIFICATION_ID = 7
+        private const val TRUST_NOTIFICATION_ID = 8
 
         @Volatile
         var instance: CastService? = null

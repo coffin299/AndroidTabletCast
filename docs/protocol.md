@@ -9,10 +9,10 @@
 | type | 名前 | 方向 | payload |
 | --- | --- | --- | --- |
 | 1 | HELLO | タブレット → PC | `u16 version`, `u8[16] tabletId`, `u8 trustMode`, `u8[16] nonce`, `u16 videoWidth`, `u16 videoHeight`, `u16 deviceWidth`, `u16 deviceHeight`, `u8 nameLength`, `utf8 name` |
-| 2 | AUTH | PC → タブレット | PIN: `u8 0`, `u8 length`, `utf8 pin`。信頼: `u8 1`, `u8[16] pcId`, `u8[32] hmac` |
+| 2 | AUTH | PC → タブレット | PIN: `u8 0`, `u8 length`, `utf8 pin`。信頼: `u8 1`, `u8[16] pcId`, `u8[32] hmac`、任意で `u8[6] mac` |
 | 3 | AUTH_RESULT | タブレット → PC | `u8 code`。0 成功、1 PIN 不一致、2 未信頼、3 信頼モードオフ、4 ロック |
 | 4 | TRUST_GRANT | タブレット → PC | `u8[16] tabletId`, `u8[32] token` |
-| 5 | TRUST_REQUEST | PC → タブレット | `u8[16] pcId`, `u8 nameLength`, `utf8 name` |
+| 5 | TRUST_REQUEST | PC → タブレット | `u8[16] pcId`, `u8 nameLength`, `utf8 name`、任意で `u8[6] mac` |
 | 16 | VIDEO_CONFIG | タブレット → PC | `u8 codec`（0 = H.264、1 = HEVC）、`u16 width`、`u16 height`、Annex-B（HEVC は VPS/SPS/PPS） |
 | 17 | VIDEO | タブレット → PC | `u64 ptsUs`, `u8 keyframe`, Annex-B |
 | 18 | AUDIO_CONFIG | タブレット → PC | `u32 sampleRate`, `u8 channels`, AudioSpecificConfig |
@@ -20,7 +20,7 @@
 | 32 | INPUT_TOUCH | PC → タブレット | `u8 action`, `u16 x`, `u16 y`。action は 0 down、1 move、2 up、3 cancel。座標は映像内の 0〜65535 |
 | 33 | INPUT_KEY | PC → タブレット | `u8 action`, `u16 keyCode`, `u32 meta`。action は 0 down、1 up |
 | 34 | INPUT_SCROLL | PC → タブレット | `u16 x`, `u16 y`, `i16 delta` |
-| 48 | STREAM_CONFIG | PC → タブレット | `u8 preset`。0 低遅延、1 バランス、2 高画質、3 最高画質 |
+| 48 | STREAM_CONFIG | PC → タブレット | `u8 preset`。0 低遅延、1 バランス、2 高画質、3 最高画質、4 高画質1080p |
 | 49 | REQUEST_KEYFRAME | PC → タブレット | 空 |
 | 126 | PING | PC → タブレット | `u64 clientUnixMs` |
 | 127 | PONG | タブレット → PC | `u64 clientUnixMs`, `u64 serverUnixMs` |
@@ -35,6 +35,8 @@
 
 再接続の HMAC は `HMAC-SHA256(key = SHA-256(token), message = HELLO の nonce)`。トークンそのものは再送しない。
 
+許可したときに、タブレットが見た ARP の MAC と PC が申告した MAC も保存する。信頼モードがオンで、そのどちらかが一致すれば、トークンが無くても PIN なしで通る。全ゼロと `02:00:00:00:00:00` は識別に使わない。MAC が無い古いパケットも読める。
+
 登録の瞬間だけトークンが LAN 上を平文で通る。
 
 ## 探索ビーコン
@@ -48,7 +50,8 @@ UDP payload は `ATC1`、`u16 tcpPort`、`u8[16] tabletId`、`u8 nameLength`、�
 - 低遅延: 長辺 1280、30fps、4Mbps
 - バランス: 長辺 1920、60fps、10Mbps
 - 高画質: 長辺 3840、60fps、30Mbps
-- 最高画質: 長辺 3840、60fps、120Mbps
+- 最高画質: 長辺 3840、60fps、50Mbps
+- 高画質1080p: 長辺 1920、60fps、24Mbps
 
 エンコーダは B フレームなし、可能なら CBR と低遅延優先。HEVC のハードウェアエンコーダがそのサイズを受け付けるときは H.265、そうでなければ H.264。指定ビットレートを拒む機種は、解像度を下げる前に半分のビットレートで同じサイズを試す。初期プリセットは最高画質。
 

@@ -53,6 +53,7 @@ const val PRESET_LOW_LATENCY = 0
 const val PRESET_BALANCED = 1
 const val PRESET_HIGH_QUALITY = 2
 const val PRESET_MAX_QUALITY = 3
+const val PRESET_HIGH_1080P = 4
 
 const val CODEC_AVC = 0
 const val CODEC_HEVC = 1
@@ -78,7 +79,7 @@ sealed class Packet {
         override val type: Int = TYPE_AUTH
     }
 
-    data class AuthTrust(val pcId: ByteArray, val hmac: ByteArray) : Packet() {
+    data class AuthTrust(val pcId: ByteArray, val hmac: ByteArray, val mac: ByteArray = ByteArray(0)) : Packet() {
         override val type: Int = TYPE_AUTH
     }
 
@@ -90,7 +91,7 @@ sealed class Packet {
         override val type: Int = TYPE_TRUST_GRANT
     }
 
-    data class TrustRequest(val pcId: ByteArray, val name: String) : Packet() {
+    data class TrustRequest(val pcId: ByteArray, val name: String, val mac: ByteArray = ByteArray(0)) : Packet() {
         override val type: Int = TYPE_TRUST_REQUEST
     }
 
@@ -301,13 +302,20 @@ object Protocol {
     private fun readAuth(reader: ByteReader): Packet {
         return when (val method = reader.u8()) {
             AUTH_METHOD_PIN -> Packet.AuthPin(readName(reader))
-            AUTH_METHOD_TRUST -> Packet.AuthTrust(reader.bytes(ID_BYTES), reader.bytes(HMAC_BYTES))
+            AUTH_METHOD_TRUST -> Packet.AuthTrust(reader.bytes(ID_BYTES), reader.bytes(HMAC_BYTES), readOptionalMac(reader))
             else -> throw ProtocolException("未知の認証方式です: $method")
         }
     }
 
     private fun readTrustRequest(reader: ByteReader): Packet.TrustRequest {
-        return Packet.TrustRequest(reader.bytes(ID_BYTES), readName(reader))
+        return Packet.TrustRequest(reader.bytes(ID_BYTES), readName(reader), readOptionalMac(reader))
+    }
+
+    private fun readOptionalMac(reader: ByteReader): ByteArray {
+        if (reader.remaining() < 6) {
+            return ByteArray(0)
+        }
+        return reader.bytes(6)
     }
 
     private fun readName(reader: ByteReader): String {
@@ -344,6 +352,7 @@ object Protocol {
                 writer.bytes(packet.pcId)
                 requireFixed(packet.hmac, HMAC_BYTES, "hmac")
                 writer.bytes(packet.hmac)
+                writeOptionalMac(writer, packet.mac)
             }
             is Packet.AuthResult -> writer.u8(packet.code)
             is Packet.TrustGrant -> {
@@ -356,6 +365,7 @@ object Protocol {
                 requireFixed(packet.pcId, ID_BYTES, "pcId")
                 writer.bytes(packet.pcId)
                 writeName(writer, packet.name)
+                writeOptionalMac(writer, packet.mac)
             }
             is Packet.VideoConfig -> {
                 writer.u8(packet.codec)
@@ -401,6 +411,11 @@ object Protocol {
             }
         }
         return writer.toByteArray()
+    }
+
+    private fun writeOptionalMac(writer: ByteWriter, mac: ByteArray) {
+        val normal = normalizeMac(mac) ?: return
+        writer.bytes(normal)
     }
 
     private fun writeName(writer: ByteWriter, value: String) {
@@ -514,6 +529,8 @@ fun presetOf(id: Int): StreamPreset {
         PRESET_BALANCED -> StreamPreset(PRESET_BALANCED, 1920, 60, 10_000_000)
         // Wi-Fi のTCPキューを膨らませないよう、最高画質でも 50 Mbps に上限を置く。
         PRESET_MAX_QUALITY -> StreamPreset(PRESET_MAX_QUALITY, 3840, 60, 50_000_000)
+        // 1080p に抑えると、PC が毎フレーム書き出す画素数が約 1/3 になり、メモリ帯域の少ない PC でもカクつきにくい。
+        PRESET_HIGH_1080P -> StreamPreset(PRESET_HIGH_1080P, 1920, 60, 24_000_000)
         else -> StreamPreset(PRESET_HIGH_QUALITY, 3840, 60, 30_000_000)
     }
 }

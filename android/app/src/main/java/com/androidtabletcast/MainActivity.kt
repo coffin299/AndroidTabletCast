@@ -185,7 +185,14 @@ class MainActivity : AppCompatActivity() {
         for (record in records) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
-            val title = label(record.name.ifBlank { record.pcId.toHex().take(8) })
+            val macText = record.macs.joinToString(" ") { formatMac(it) }
+            val title = label(
+                if (macText.isBlank()) {
+                    record.name.ifBlank { record.pcId.toHex().take(8) }
+                } else {
+                    record.name.ifBlank { "PC" } + "\n" + macText
+                },
+            )
             title.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             val remove = MaterialButton(this)
             remove.text = "取消"

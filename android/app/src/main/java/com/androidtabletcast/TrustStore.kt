@@ -11,6 +11,7 @@ data class TrustedPc(
     val name: String,
     val key: ByteArray,
     val createdAt: Long,
+    val macs: List<ByteArray> = emptyList(),
 )
 
 class TrustStore(context: Context) {
@@ -37,13 +38,39 @@ class TrustStore(context: Context) {
     }
 
     @Synchronized
-    fun grant(pcId: ByteArray, name: String): ByteArray {
+    fun grant(pcId: ByteArray, name: String, macs: List<ByteArray> = emptyList()): ByteArray {
         val token = ByteArray(TOKEN_BYTES)
         random.nextBytes(token)
-        val record = TrustedPc(pcId.copyOf(), name, sha256(token), System.currentTimeMillis())
+        val record = TrustedPc(pcId.copyOf(), name, sha256(token), System.currentTimeMillis(), usableMacs(macs))
         val next = readAll().filterNot { it.pcId.contentEquals(pcId) } + record
         writeAll(next)
         return token
+    }
+
+    @Synchronized
+    fun rememberMacs(pcId: ByteArray, macs: List<ByteArray>) {
+        val adding = usableMacs(macs)
+        if (adding.isEmpty()) {
+            return
+        }
+        val current = readAll()
+        val found = current.firstOrNull { it.pcId.contentEquals(pcId) } ?: return
+        val merged = mergeMacs(found.macs, adding)
+        if (merged.size == found.macs.size) {
+            return
+        }
+        writeAll(current.map { if (it.pcId.contentEquals(pcId)) it.copy(macs = merged) else it })
+    }
+
+    @Synchronized
+    fun matchesMac(macs: List<ByteArray>): Boolean {
+        val wanted = usableMacs(macs)
+        if (wanted.isEmpty()) {
+            return false
+        }
+        return readAll().any { record ->
+            record.macs.any { saved -> wanted.any { it.contentEquals(saved) } }
+        }
     }
 
     @Synchronized
@@ -77,10 +104,38 @@ class TrustStore(context: Context) {
                     name = obj.getString("name"),
                     key = hexToBytes(obj.getString("key")),
                     createdAt = obj.getLong("createdAt"),
+                    macs = readMacs(obj),
                 ),
             )
         }
         return items
+    }
+
+    private fun readMacs(obj: JSONObject): List<ByteArray> {
+        val array = obj.optJSONArray("macs") ?: return emptyList()
+        val macs = ArrayList<ByteArray>(array.length())
+        for (index in 0 until array.length()) {
+            val parsed = parseMac(array.optString(index))
+            if (parsed != null) {
+                macs.add(parsed)
+            }
+        }
+        return macs
+    }
+
+    private fun usableMacs(macs: List<ByteArray>): List<ByteArray> {
+        return mergeMacs(emptyList(), macs)
+    }
+
+    private fun mergeMacs(current: List<ByteArray>, adding: List<ByteArray>): List<ByteArray> {
+        val merged = current.map { it.copyOf() }.toMutableList()
+        for (mac in adding) {
+            val normal = normalizeMac(mac) ?: continue
+            if (merged.none { it.contentEquals(normal) }) {
+                merged.add(normal)
+            }
+        }
+        return merged
     }
 
     private fun writeAll(items: List<TrustedPc>) {
@@ -91,7 +146,12 @@ class TrustStore(context: Context) {
                     .put("pcId", item.pcId.toHex())
                     .put("name", item.name)
                     .put("key", item.key.toHex())
-                    .put("createdAt", item.createdAt),
+                    .put("createdAt", item.createdAt)
+                    .put("macs", JSONArray().apply {
+                        for (mac in item.macs) {
+                            put(mac.toHex())
+                        }
+                    }),
             )
         }
         file.writeText(array.toString())

@@ -27,17 +27,48 @@ public sealed unsafe class VideoDecoder : IDisposable
     private int codecId;
     private static int nativeReady;
     private readonly VideoDecodeMode decodeMode;
+    private readonly int preferredGpu;
     private readonly AVCodecContext_get_format getFormatCallback;
     private AVPixelFormat hardwarePixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
     private bool hardwareSelected;
+    private bool hardwareRejected;
+    private bool softwareFallback;
+    private bool gaveUp;
+    private int[] gpuPlan = Array.Empty<int>();
+    private int gpuSlot;
+    private string activeGpuName = "規定のGPU";
+    private int pendingWidth;
+    private int pendingHeight;
 
-    public VideoDecoder(VideoDecodeMode decodeMode = VideoDecodeMode.Automatic)
+    public VideoDecoder(VideoDecodeMode decodeMode = VideoDecodeMode.Automatic, int preferredGpu = -1)
     {
         this.decodeMode = decodeMode;
+        this.preferredGpu = preferredGpu;
         getFormatCallback = SelectPixelFormat;
     }
 
-    public bool HardwareAccelerated => hardwareSelected;
+    public bool HardwareAccelerated => hardwareSelected && !softwareFallback;
+
+    public string Describe()
+    {
+        if (softwareFallback && gaveUp)
+        {
+            return $"ソフトウェア（{activeGpuName} はこのコーデックをGPUで解けません）";
+        }
+
+        if (softwareFallback || decodeMode == VideoDecodeMode.Software)
+        {
+            return "ソフトウェア";
+        }
+
+        var mode = decodeMode switch
+        {
+            VideoDecodeMode.Dxva2 => "DXVA2",
+            VideoDecodeMode.D3D11Va => "D3D11VA",
+            _ => "ハードウェア",
+        };
+        return hardwareSelected ? $"{mode} / {activeGpuName}" : $"{mode} / {activeGpuName} を準備中";
+    }
 
     public static string? ProbeNative()
     {
@@ -76,64 +107,104 @@ public sealed unsafe class VideoDecoder : IDisposable
         EnsureNative();
         Close();
         codecId = codec;
-        var codecIdFfmpeg = codec == ProtocolLimits.CodecHevc
-            ? AVCodecID.AV_CODEC_ID_HEVC
-            : AVCodecID.AV_CODEC_ID_H264;
-        var decoder = ffmpeg.avcodec_find_decoder(codecIdFfmpeg);
-        if (decoder == null)
+        pendingWidth = width;
+        pendingHeight = height;
+        parameterSets = annexB;
+        softwareFallback = decodeMode == VideoDecodeMode.Software;
+        gaveUp = false;
+        hardwareRejected = false;
+        gpuPlan = softwareFallback ? Array.Empty<int>() : BuildGpuPlan();
+        gpuSlot = 0;
+        if (softwareFallback)
         {
-            throw new InvalidOperationException("映像デコーダがありません");
+            if (!OpenContext(-1))
+            {
+                throw new InvalidOperationException("映像デコーダを初期化できません");
+            }
+
+            return;
         }
 
-        context = ffmpeg.avcodec_alloc_context3(decoder);
-        context->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
-        context->thread_count = decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2 ? 1 : 0;
-        context->width = width;
-        context->height = height;
-        if (!ConfigureHardware(context) && decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2)
+        while (gpuSlot < gpuPlan.Length)
         {
-            Close();
-            throw new InvalidOperationException($"{decodeMode} ハードウェアデコードを初期化できません。自動またはソフトウェアを選んでください。");
+            // パラメータセットだけで GPU が拒否したときは、次のアダプタで作り直す。
+            if (OpenContext(gpuPlan[gpuSlot]) && !hardwareRejected)
+            {
+                return;
+            }
+
+            gpuSlot++;
         }
-        // annex-B を extradata に入れると FFmpeg が同期できず、画面が真っ黒になる。
-        Check(ffmpeg.avcodec_open2(context, decoder, null));
-        frame = ffmpeg.av_frame_alloc();
-        transferFrame = ffmpeg.av_frame_alloc();
-        packet = ffmpeg.av_packet_alloc();
-        open = true;
-        parameterSets = annexB;
-        if (annexB.Length > 0)
+
+        var failedName = activeGpuName;
+        softwareFallback = true;
+        gaveUp = true;
+        if (!OpenContext(-1))
         {
-            Decode(annexB, false, out _, out _);
+            throw new InvalidOperationException("映像デコーダを初期化できません");
         }
+
+        activeGpuName = failedName;
     }
 
-    public byte[]? Decode(byte[] annexB, bool keyframe, out int width, out int height)
+    public byte[]? Decode(
+        byte[] annexB,
+        bool keyframe,
+        bool present,
+        byte[]? reuse,
+        out int width,
+        out int height,
+        out bool consumed)
     {
         width = 0;
         height = 0;
+        consumed = false;
         if (!open || annexB.Length == 0)
         {
             return null;
         }
 
         var payload = keyframe ? WithParameterSets(annexB) : annexB;
-        ffmpeg.av_packet_unref(packet);
-        Check(ffmpeg.av_new_packet(packet, payload.Length));
-        Marshal.Copy(payload, 0, (IntPtr)packet->data, payload.Length);
-        if (keyframe)
+        var sent = SendPacket(payload, keyframe);
+        if (hardwareRejected && !softwareFallback)
         {
-            packet->flags |= ffmpeg.AV_PKT_FLAG_KEY;
+            // この GPU がコーデックを拒否した。明示指定でなければ次の GPU を開く。
+            if (MoveToNextGpu())
+            {
+                if (!keyframe)
+                {
+                    return null;
+                }
+
+                sent = SendPacket(payload, true);
+            }
+            else
+            {
+                var failedName = activeGpuName;
+                softwareFallback = true;
+                gaveUp = true;
+                if (!OpenContext(-1))
+                {
+                    return null;
+                }
+
+                activeGpuName = failedName;
+                if (!keyframe)
+                {
+                    return null;
+                }
+
+                sent = SendPacket(payload, true);
+            }
         }
 
-        var sent = ffmpeg.avcodec_send_packet(context, packet);
         if (sent < 0)
         {
-            if ((decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2) && !hardwareSelected)
+            if (open && context != null)
             {
-                throw new InvalidOperationException($"{decodeMode} はこの映像コーデックまたはGPUで利用できません。");
+                ffmpeg.avcodec_flush_buffers(context);
             }
-            ffmpeg.avcodec_flush_buffers(context);
+
             return null;
         }
 
@@ -143,16 +214,140 @@ public sealed unsafe class VideoDecoder : IDisposable
             return null;
         }
 
-        return ToBgra(out width, out height);
+        consumed = true;
+        if (!present)
+        {
+            // 画面へ出す前のコマが残っているときは、GPU から BGRA へのコピーをしない。
+            ffmpeg.av_frame_unref(frame);
+            return null;
+        }
+
+        var bgra = ToBgra(reuse, out width, out height);
+        ffmpeg.av_frame_unref(frame);
+        return bgra;
     }
 
-    private bool ConfigureHardware(AVCodecContext* codecContext)
+    private int[] BuildGpuPlan()
     {
-        if (decodeMode == VideoDecodeMode.Software)
+        if (preferredGpu >= 0)
+        {
+            return new[] { preferredGpu };
+        }
+
+        var plan = new List<int> { -1 };
+        foreach (var adapter in DxgiAdapters.List())
+        {
+            if (adapter.Name.Contains("Basic Render", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            plan.Add(adapter.Index);
+        }
+
+        return plan.ToArray();
+    }
+
+    private bool MoveToNextGpu()
+    {
+        if (preferredGpu >= 0)
         {
             return false;
         }
 
+        gpuSlot++;
+        while (gpuSlot < gpuPlan.Length)
+        {
+            if (OpenContext(gpuPlan[gpuSlot]) && !hardwareRejected)
+            {
+                return true;
+            }
+
+            gpuSlot++;
+        }
+
+        return false;
+    }
+
+    private bool OpenContext(int gpuIndex)
+    {
+        ReleaseNative();
+        hardwareRejected = false;
+        hardwareSelected = false;
+        activeGpuName = gpuIndex < 0 ? "規定のGPU" : DxgiAdapters.NameOf(gpuIndex);
+        var codecIdFfmpeg = codecId == ProtocolLimits.CodecHevc
+            ? AVCodecID.AV_CODEC_ID_HEVC
+            : AVCodecID.AV_CODEC_ID_H264;
+        var decoder = ffmpeg.avcodec_find_decoder(codecIdFfmpeg);
+        if (decoder == null)
+        {
+            return false;
+        }
+
+        context = ffmpeg.avcodec_alloc_context3(decoder);
+        if (context == null)
+        {
+            return false;
+        }
+
+        context->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
+        context->thread_count = softwareFallback ? 0 : 1;
+        context->width = pendingWidth;
+        context->height = pendingHeight;
+        if (!softwareFallback && !ConfigureHardware(context, gpuIndex))
+        {
+            ReleaseNative();
+            return false;
+        }
+
+        // annex-B を extradata に入れると FFmpeg が同期できず、画面が真っ黒になる。
+        if (ffmpeg.avcodec_open2(context, decoder, null) < 0)
+        {
+            ReleaseNative();
+            return false;
+        }
+
+        frame = ffmpeg.av_frame_alloc();
+        transferFrame = ffmpeg.av_frame_alloc();
+        packet = ffmpeg.av_packet_alloc();
+        open = true;
+        if (!softwareFallback && parameterSets.Length > 0)
+        {
+            // ここで GPU がフォーマットを拒否したら、呼び出し側が次のアダプタへ進む。
+            SendPacket(parameterSets, false);
+            if (hardwareRejected)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private int SendPacket(byte[] payload, bool keyframe)
+    {
+        if (!open || context == null || packet == null || payload.Length == 0)
+        {
+            return -1;
+        }
+
+        ffmpeg.av_packet_unref(packet);
+        if (ffmpeg.av_new_packet(packet, payload.Length) < 0)
+        {
+            return -1;
+        }
+
+        Marshal.Copy(payload, 0, (IntPtr)packet->data, payload.Length);
+        if (keyframe)
+        {
+            packet->flags |= ffmpeg.AV_PKT_FLAG_KEY;
+        }
+
+        return ffmpeg.avcodec_send_packet(context, packet);
+    }
+
+    private bool ConfigureHardware(AVCodecContext* codecContext, int gpuIndex)
+    {
         var devices = decodeMode switch
         {
             VideoDecodeMode.D3D11Va => new[] { (AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA, AVPixelFormat.AV_PIX_FMT_D3D11) },
@@ -164,13 +359,15 @@ public sealed unsafe class VideoDecoder : IDisposable
             },
         };
 
+        // FFmpeg はアダプタ番号の文字列で GPU を選ぶ。-1 のときはドライバの規定 GPU。
+        var deviceName = gpuIndex >= 0 ? gpuIndex.ToString() : null;
         foreach (var device in devices)
         {
             AVBufferRef* hardwareDevice = null;
             var result = ffmpeg.av_hwdevice_ctx_create(
                 &hardwareDevice,
                 device.Item1,
-                null,
+                deviceName,
                 null,
                 0);
             if (result < 0 || hardwareDevice == null)
@@ -189,21 +386,35 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     private AVPixelFormat SelectPixelFormat(AVCodecContext* _, AVPixelFormat* formats)
     {
+        AVPixelFormat? compatible = null;
         for (var current = formats; *current != AVPixelFormat.AV_PIX_FMT_NONE; current++)
         {
             if (*current == hardwarePixelFormat)
             {
                 hardwareSelected = true;
+                hardwareRejected = false;
                 return *current;
+            }
+
+            if (hardwarePixelFormat == AVPixelFormat.AV_PIX_FMT_D3D11 &&
+                *current == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+            {
+                compatible = *current;
             }
         }
 
-        if (decodeMode is VideoDecodeMode.D3D11Va or VideoDecodeMode.Dxva2)
+        if (compatible != null)
         {
-            return AVPixelFormat.AV_PIX_FMT_NONE;
+            hardwarePixelFormat = compatible.Value;
+            hardwareSelected = true;
+            hardwareRejected = false;
+            return compatible.Value;
         }
 
-        return formats[0];
+        // NONE を返すとデコード全体が失敗する。拒否だけ記録し、次の GPU かソフトウェアへ渡す。
+        hardwareRejected = true;
+        hardwareSelected = false;
+        return AVPixelFormat.AV_PIX_FMT_NONE;
     }
 
     private byte[] WithParameterSets(byte[] annexB)
@@ -253,7 +464,7 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     public void Dispose() => Close();
 
-    private byte[] ToBgra(out int width, out int height)
+    private byte[] ToBgra(byte[]? reuse, out int width, out int height)
     {
         AVFrame* source = frame;
         if (hardwareSelected && frame->format == (int)hardwarePixelFormat)
@@ -289,7 +500,8 @@ public sealed unsafe class VideoDecoder : IDisposable
             scaledFormat = format;
         }
 
-        var bgra = new byte[width * height * 4];
+        var bytes = width * height * 4;
+        var bgra = reuse != null && reuse.Length == bytes ? reuse : new byte[bytes];
         fixed (byte* destination = bgra)
         {
             var destData = new byte_ptrArray8();
@@ -312,8 +524,13 @@ public sealed unsafe class VideoDecoder : IDisposable
 
     private void Close()
     {
-        open = false;
         parameterSets = Array.Empty<byte>();
+        ReleaseNative();
+    }
+
+    private void ReleaseNative()
+    {
+        open = false;
         hardwareSelected = false;
         hardwarePixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
         if (scaler != null)

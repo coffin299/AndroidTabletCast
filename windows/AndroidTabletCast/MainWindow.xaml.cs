@@ -15,12 +15,13 @@ public partial class MainWindow : Window
     private readonly object frameGate = new();
     private readonly object decoderGate = new();
     private readonly object videoQueueGate = new();
-    private readonly BlockingCollection<Packet> videoPackets = new(new ConcurrentQueue<Packet>(), 12);
+    private readonly BlockingCollection<Packet> videoPackets = new(new ConcurrentQueue<Packet>(), 3);
     private StreamClient? session;
     private VideoDecoder? decoder;
     private AudioOutput? audio;
     private WriteableBitmap? bitmap;
     private byte[]? latestFrame;
+    private byte[]? spareFrame;
     private int latestWidth;
     private int latestHeight;
     private bool renderQueued;
@@ -34,12 +35,22 @@ public partial class MainWindow : Window
     private VideoConfigPacket? latestVideoConfig;
     private long lastKeyframeRequest;
     private ObsWindow? obsWindow;
+    private string connectedHost = "";
+    private readonly List<GpuAdapter> gpuChoices = new();
     private WindowStyle previousStyle;
     private WindowState previousState;
 
     public MainWindow()
     {
         InitializeComponent();
+        GpuBox.Items.Add("自動（対応するGPUを探す）");
+        foreach (var adapter in DxgiAdapters.List())
+        {
+            gpuChoices.Add(adapter);
+            GpuBox.Items.Add(adapter.Name);
+        }
+
+        GpuBox.SelectedIndex = 0;
         _ = Task.Run(ProcessVideoPackets);
         var missing = VideoDecoder.ProbeNative();
         if (missing != null)
@@ -121,7 +132,8 @@ public partial class MainWindow : Window
         var client = new StreamClient();
         lock (decoderGate)
         {
-            decoder = new VideoDecoder((VideoDecodeMode)DecoderModeBox.SelectedIndex);
+            var gpu = GpuBox.SelectedIndex <= 0 ? -1 : gpuChoices[GpuBox.SelectedIndex - 1].Index;
+            decoder = new VideoDecoder((VideoDecodeMode)DecoderModeBox.SelectedIndex, gpu);
         }
         audio = new AudioOutput { Muted = MuteBox.IsChecked == true };
         client.PacketReceived += OnPacket;
@@ -134,7 +146,9 @@ public partial class MainWindow : Window
             }
         });
         session = client;
+        connectedHost = host;
         DecoderModeBox.IsEnabled = false;
+        GpuBox.IsEnabled = false;
         await Task.Run(() => client.ConnectAsync(host, port, CancellationToken.None));
         var hello = client.Hello ?? throw new ProtocolException("HELLO がありません");
         SendAuth(client, hello);
@@ -142,12 +156,25 @@ public partial class MainWindow : Window
 
     private void SendAuth(StreamClient client, HelloPacket hello)
     {
-        if (hello.TrustMode && store.TryGetToken(hello.TabletId, out var token))
+        if (hello.TrustMode)
         {
-            // PIN 欄に前回の値が残っていても、登録済みなら信頼を先に使う。
-            client.SendTrust(store.PcId, token);
-            Status("信頼情報で認証しています");
-            return;
+            var mac = LocalMac.ForHost(connectedHost);
+            var macText = LocalMac.Format(mac);
+            if (store.TryGetToken(hello.TabletId, out var token))
+            {
+                // PIN 欄に前回の値が残っていても、登録済みなら信頼を先に使う。MAC も添える。
+                client.SendTrust(store.PcId, token, mac);
+                Status(macText.Length == 0 ? "信頼情報で認証しています" : $"信頼情報で認証しています（{macText}）");
+                return;
+            }
+
+            if (mac.Length == 6)
+            {
+                // トークンが無くても、タブレットが覚えている MAC なら通る。
+                client.Send(new AuthTrustPacket(store.PcId, new byte[ProtocolLimits.TokenBytes], mac));
+                Status($"MAC アドレスで認証しています（{macText}）");
+                return;
+            }
         }
 
         var pin = PinBox.Text.Trim();
@@ -270,7 +297,9 @@ public partial class MainWindow : Window
                     {
                         decoder?.Open(config.Codec, config.AnnexB, config.Width, config.Height);
                     }
-                    Dispatcher.BeginInvoke(() => Status($"映像設定受信: {(config.Codec == ProtocolLimits.CodecHevc ? "HEVC" : "H.264")} {config.Width}×{config.Height}"));
+                    var codecName = config.Codec == ProtocolLimits.CodecHevc ? "HEVC" : "H.264";
+                    var device = decoder?.Describe() ?? "";
+                    Dispatcher.BeginInvoke(() => Status($"映像設定受信: {codecName} {config.Width}×{config.Height} / {device}"));
                 }
                 catch (Exception error)
                 {
@@ -288,12 +317,24 @@ public partial class MainWindow : Window
             byte[]? bgra = null;
             var width = 0;
             var height = 0;
+            var consumed = false;
             var hardwareAccelerated = false;
+            var present = !PresenterBusy();
+            byte[]? reuse = null;
+            if (present)
+            {
+                lock (frameGate)
+                {
+                    reuse = spareFrame;
+                    spareFrame = null;
+                }
+            }
+
             try
             {
                 lock (decoderGate)
                 {
-                    bgra = decoder?.Decode(video.AnnexB, video.Keyframe, out width, out height);
+                    bgra = decoder?.Decode(video.AnnexB, video.Keyframe, present, reuse, out width, out height, out consumed);
                     hardwareAccelerated = decoder?.HardwareAccelerated == true;
                 }
             }
@@ -308,7 +349,20 @@ public partial class MainWindow : Window
 
             if (bgra == null)
             {
-                RequestKeyframe();
+                if (reuse != null)
+                {
+                    lock (frameGate)
+                    {
+                        spareFrame ??= reuse;
+                    }
+                }
+
+                // 描画が追いつかないフレームは変換だけ省く。デコード自体は済んでいるので、鍵フレームは要求しない。
+                if (!consumed)
+                {
+                    RequestKeyframe();
+                }
+
                 continue;
             }
 
@@ -316,7 +370,7 @@ public partial class MainWindow : Window
             if (!firstVideoFrameReceived)
             {
                 firstVideoFrameReceived = true;
-                var mode = hardwareAccelerated ? "ハードウェアデコード" : "ソフトウェアデコード";
+                var mode = decoder?.Describe() ?? (hardwareAccelerated ? "ハードウェアデコード" : "ソフトウェアデコード");
                 Dispatcher.BeginInvoke(() => Status($"映像を受信しています（{mode}）"));
             }
         }
@@ -407,6 +461,18 @@ public partial class MainWindow : Window
         }
 
         bitmap.WritePixels(new Int32Rect(0, 0, width, height), frame, width * 4, 0);
+        lock (frameGate)
+        {
+            spareFrame = frame;
+        }
+    }
+
+    private bool PresenterBusy()
+    {
+        lock (frameGate)
+        {
+            return renderQueued && latestFrame != null;
+        }
     }
 
     private void RequestKeyframe()
@@ -430,8 +496,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        session.Send(new TrustRequestPacket(store.PcId, store.PcName));
-        Status("タブレットで信頼の確認を出しています");
+        var mac = LocalMac.ForHost(connectedHost);
+        session.Send(new TrustRequestPacket(store.PcId, store.PcName, mac));
+        var macText = LocalMac.Format(mac);
+        Status(macText.Length == 0
+            ? "タブレットで信頼の確認を出しています。出ないときは通知か「他のアプリの上に表示」を確認してください"
+            : $"タブレットで信頼の確認を出しています（{macText}）");
     }
 
     private void ForgetButton_Click(object sender, RoutedEventArgs e)
@@ -718,6 +788,7 @@ public partial class MainWindow : Window
         audio?.Dispose();
         audio = null;
         DecoderModeBox.IsEnabled = true;
+        GpuBox.IsEnabled = true;
         TrustButton.IsEnabled = false;
     }
 
